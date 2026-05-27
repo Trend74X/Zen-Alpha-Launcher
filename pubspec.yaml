@@ -12,7 +12,7 @@ dependencies:
   do_not_disturb: ^1.0.3
   flutter:
     sdk: flutter
-  flutter_notification_listener: ^1.4.0
+  flutter_notification_listener_plus: ^1.1.0
   get: ^4.7.3
   get_storage: ^2.1.1
   intl: ^0.20.2

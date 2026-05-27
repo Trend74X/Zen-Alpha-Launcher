@@ -1,6 +1,8 @@
 package com.example.zen_launcher
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
 import android.view.WindowManager
@@ -21,12 +23,32 @@ class MainActivity: FlutterActivity() {
         }
         
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            if (call.method == "isIgnoringBattery") {
-                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-                val isIgnoring = powerManager.isIgnoringBatteryOptimizations(packageName)
-                result.success(isIgnoring)
-            } else {
-                result.notImplemented()
+            when (call.method) {
+                "isIgnoringBattery" -> {
+                    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    val isIgnoring = powerManager.isIgnoringBatteryOptimizations(packageName)
+                    result.success(isIgnoring)
+                }
+                
+                "getAppLabel" -> {
+                    val targetPackageName = call.arguments<String>()
+                    if (targetPackageName != null) {
+                        try {
+                            val pm: PackageManager = packageManager
+                            val ai: ApplicationInfo = pm.getApplicationInfo(targetPackageName, 0)
+                            val appLabel = pm.getApplicationLabel(ai).toString()
+                            result.success(appLabel) // Returns clean names like "Facebook", "Daraz"
+                        } catch (e: PackageManager.NameNotFoundException) {
+                            result.success(null) // Safe fallback if app was just uninstalled
+                        }
+                    } else {
+                        result.error("BAD_ARGUMENTS", "Package name argument was null", null)
+                    }
+                }
+                
+                else -> {
+                    result.notImplemented()
+                }
             }
         }
     }
