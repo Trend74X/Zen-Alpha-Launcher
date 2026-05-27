@@ -31,7 +31,7 @@ class MainApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return const GetMaterialApp(
       home: BottomNav(),
-      debugShowCheckedModeBanner: true,
+      debugShowCheckedModeBanner: false,
     );
   }
 }

@@ -1,114 +1,85 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:zen_launcher/src/controller/app_controller.dart';
 
-class ZenToolsPage extends StatefulWidget {
+class ZenToolsPage extends StatelessWidget {
   const ZenToolsPage({super.key});
 
   @override
-  State<ZenToolsPage> createState() => _ZenToolsPageState();
-}
-
-class _ZenToolsPageState extends State<ZenToolsPage> {
-  bool isGrayscale       = true;
-  bool hideNotifications = false;
-  bool appTimers         = false;
-
-  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0D0D0D),
-      extendBodyBehindAppBar: true,
-      resizeToAvoidBottomInset: false,
-      body: Padding(
-        padding: const EdgeInsets.symmetric( horizontal: 16.0, vertical: 16.0),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header
-              const Text(
-                'ZEN\nCONTROL',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 48,
-                  fontWeight: FontWeight.w900,
-                  height: 0.9,
-                  letterSpacing: -1,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'ENVIRONMENTAL ARCHITECTURE',
-                style: TextStyle(
-                  color: Colors.grey[600],
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              const SizedBox(height: 60),
-          
-              // Settings List
-              _buildToggleSetting('Grayscale Mode', 'Strip all chroma from the interface.', isGrayscale, (newValue) { setState(() => isGrayscale = newValue);}),
-              _buildToggleSetting('Hide All Notifications', 'Suppress every external interruption.', hideNotifications, (newValue) { setState(() => hideNotifications = newValue);}),
-              _buildToggleSetting('App Timers', 'Hard-lock distracting applications.', appTimers, (newValue) { setState(() => appTimers = newValue);}),
-          
-              const SizedBox(height: 40),
-          
-              // Bedtime Section
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Bedtime', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 4),
-                      Text('Circadian alignment\nprotocol.', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                    ],
+    final AppController controller = Get.find<AppController>();
+
+    return Stack(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 24.0), 
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 50.0), 
+                
+                // Header Design Block
+                const Text(
+                  'ZEN\nCONTROL',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 48,
+                    fontWeight: FontWeight.w900,
+                    height: 0.9,
+                    letterSpacing: -1,
                   ),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text('STATUS', style: TextStyle(color: Colors.grey, fontSize: 10, fontWeight: FontWeight.bold)),
-                      Text('DARKNESS', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                      Text('ACTIVE', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                    ],
-                  )
-                ],
-              ),
-              
-              const SizedBox(height: 30),
-              
-              // Timeline/Slider Placeholder
-              const Divider(color: Colors.white, thickness: 2, endIndent: 200),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _timeLabel('MIDNIGHT'),
-                  _timeLabel('7 AM'),
-                  _timeLabel('10 PM'),
-                ],
-              ),
-              
-              const SizedBox(height: 40),
-              
-              // Bottom Stats
-              Row(
-                children: [
-                  _buildStat('INTENSITY', 'TOTAL BLACKOUT'),
-                  const SizedBox(width: 40),
-                  _buildStat('DURATION', '09:00:00'),
-                ],
-              ),
-      
-              SizedBox(height: 120.0)
-          
-            ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'ENVIRONMENTAL ARCHITECTURE',
+                  style: TextStyle(
+                    color: Colors.grey[600],
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 60),
+            
+                // Reactive Toggles Block
+                Obx(() => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildToggleSetting(
+                      'Do Not Disturb', 
+                      'Silence all incoming calls and message alerts.', 
+                      controller.isDndActive.value, 
+                      (newValue) => controller.toggleDoNotDisturb(context, newValue),
+                    ),
+                    
+                    _buildToggleSetting(
+                      'App Timers', 
+                      'Hard-lock distracting applications.', 
+                      controller.appTimersActive.value, 
+                      (newValue) => controller.toggleAppTimers(newValue),
+                    ),
+                  ],
+                )),
+            
+                const SizedBox(height: 20),
+
+                const Divider(color: Colors.white, thickness: 1),
+                const SizedBox(height: 20),
+                
+                // Obx handles the reactive timer string changes smoothly
+                Obx(() => Row(
+                  children: [
+                    _buildStat('DEVICE ACTIVE TODAY', controller.todayScreenTime.value),
+                  ],
+                )),
+        
+                const SizedBox(height: 120.0)
+              ],
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 
@@ -118,7 +89,6 @@ class _ZenToolsPageState extends State<ZenToolsPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Text Labels
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -130,11 +100,10 @@ class _ZenToolsPageState extends State<ZenToolsPage> {
             ),
           ),
           
-          // The Interactive Switch
           GestureDetector(
-            onTap: () => onChanged(!currentValue), // Toggle the value on click
+            onTap: () => onChanged(!currentValue), 
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200), // Smooth transition
+              duration: const Duration(milliseconds: 200),
               width: 44,
               height: 24,
               padding: const EdgeInsets.all(3),
@@ -159,8 +128,6 @@ class _ZenToolsPageState extends State<ZenToolsPage> {
       ),
     );
   }
-
-  Widget _timeLabel(String label) => Text(label, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold));
 
   Widget _buildStat(String label, String value) {
     return Container(

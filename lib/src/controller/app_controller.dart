@@ -12,14 +12,24 @@ import 'package:get/get.dart';
 
 class AppController extends GetxController with WidgetsBindingObserver {
   final dndPlugin = DoNotDisturbPlugin();
+  
+  // Single unified method channel matching your MainActivity.kt definition
   static const platform = MethodChannel('com.zen_launcher/battery');
 
-  var isDndEnabled = false.obs;
+  // --- GETX OBSERVABLE STATES ---
   var isListenerRunning = false.obs;
+  var isDndActive = false.obs;       // Connected directly to the custom environment panel toggle
+  var appTimersActive = false.obs;   // Connected directly to the custom environment panel toggle
   
-  // Master thread safe list of notifications intercepted by the platform
+  // Master thread-safe list of notifications intercepted by the platform
   var collectedNotifications = <NotificationEvent>[].obs;
   var appLabelCache = <String, String>{}.obs;
+
+  // --- USER CONTROLLER SCREEN CLOCK OBSERVABLES ---
+  var todayScreenTime = "00:00:00".obs;
+  Timer? _tickerTimer;
+  int _accumulatedSecondsToday = 0; // Cumulative active seconds for the day
+  bool _isDeviceScreenOn = true;    // Track state to manage background counting
 
   // Track the raw port mapping to safely handle teardowns
   ReceivePort? _uiReceivePort;
@@ -34,14 +44,20 @@ class AppController extends GetxController with WidgetsBindingObserver {
   Future<void> onInit() async {
     super.onInit();
     WidgetsBinding.instance.addObserver(this);
+    
+    // Core Launcher Workflows
     await startZenModeWorkflow();
     await fetchInstalledApps();
+    
+    // Initialize Permissionless Local Screen Tracking
+    initLocalScreenTimeTracking();
   } 
 
   @override
   void onClose() {
     WidgetsBinding.instance.removeObserver(this);
     _uiReceivePort?.close();
+    _tickerTimer?.cancel();
     super.onClose();
   }
 
@@ -54,10 +70,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
   }
 
   // =================================================================
-  // STEP 1 WORKHORSE: THE COMPUTED CHANNEL-GROUPING MAP
+  // COMPUTED CHANNEL-GROUPING MAP
   // =================================================================
   /// GetX Reactive Getter that transforms our flat array into a map organized by package names.
-  /// Iterating in reverse ensures the newest notifications bubble to the top of each group.
   Map<String, List<NotificationEvent>> get groupedNotifications {
     final Map<String, List<NotificationEvent>> groups = {};
     
@@ -83,15 +98,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
       return; 
     }
 
-    bool hasDndPermission = await dndPlugin.isNotificationPolicyAccessGranted();
-    if (!hasDndPermission) {
-      log('DND Access Permission missing. Prompting user...');
-      await dndPlugin.openNotificationPolicyAccessSettings();
-      return; 
-    }
-
+    // Sync current native Do Not Disturb status flags on app startup
+    await checkCurrentDndStatus();
     await checkAndRequestBatteryExemption();
-    await enableDNDMode();
     await initializeNotificationCollector();
   }
 
@@ -110,20 +119,83 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-  Future<void> enableDNDMode() async {
-    bool active = await dndPlugin.isDndEnabled();
-    if (!active) {
-      log('Enabling Zen Priority Silence Mode...');
-      await dndPlugin.setInterruptionFilter(InterruptionFilter.priority);
-      isDndEnabled.value = true;
-    } else {
-      log('DND Mode is already active.');
-      isDndEnabled.value = true;
+  // =================================================================
+  // ENVIRONMENT STATE PROGRAMMATIC CONTROLLERS
+  // =================================================================
+
+  /// Queries the native Android layer via method channel to see if DND is active
+  Future<void> checkCurrentDndStatus() async {
+    try {
+      final bool systemDndActive = await platform.invokeMethod('isDNDEnabled');
+      isDndActive.value = systemDndActive;
+    } catch (e) {
+      log("Failed to fetch native DND status profile mapping: $e");
     }
   }
 
+  /// Triggers a native system invocation request to switch Do Not Disturb states
+  Future<void> toggleDoNotDisturb(BuildContext context, bool targetState) async {
+    try {
+      final bool success = await platform.invokeMethod('setDNDMode', {'enabled': targetState});
+      if (success) {
+        isDndActive.value = targetState;
+      }
+    } on PlatformException catch (e) {
+      if (e.code == 'MISSING_PERMISSION') {
+        // ignore: use_build_context_synchronously
+        _showDndPermissionDialog(context);
+      }
+    }
+  }
+
+  /// Adjusts the tracking configuration state for the environment App Timers interface
+  void toggleAppTimers(bool targetState) {
+    appTimersActive.value = targetState;
+  }
+
+  /// Triggers a direct platform gateway lookup to launch the native system DND access panel
+  Future<void> openDNDSettings() async {
+    try {
+      await platform.invokeMethod('openDNDPermissionSettings');
+    } catch (e) {
+      log("Could not open native permission configuration panel: $e");
+    }
+  }
+
+  /// Prompting layout dialog asking the user to grant Notification Policy Access permissions
+  void _showDndPermissionDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.black,
+        shape: const LinearBorder(), // Un-rounded sharp edge minimalist window frame
+        title: const Text(
+          'SYSTEM PERMISSION REQUIRED', 
+          style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 1),
+        ),
+        content: Text(
+          'Zen Launcher needs notification policy access to automatically suppress incoming calls and message alerts.',
+          style: TextStyle(color: Colors.grey[400], fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('CANCEL', style: TextStyle(color: Colors.grey[600], fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await openDNDSettings();
+            },
+            child: const Text('GRANT ACCESS', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   // =================================================================
-  // NOTIFICATION BACKGROUND BACKGROUND ROUTING MANAGEMENT
+  // NOTIFICATION BACKGROUND ROUTING MANAGEMENT
   // =================================================================
   Future<void> initializeNotificationCollector() async {
     await NotificationsListener.initialize(callbackHandle: backgroundNotificationHandler);
@@ -157,9 +229,6 @@ class AppController extends GetxController with WidgetsBindingObserver {
     log('Notification intercepted from: ${event.packageName}');
     if (event.title == null && event.text == null) return;
 
-    // Helper to get a stable signature of the message string.
-    // Slicing the first 15 characters lets us match "NICA traded at..." with "NICA traded at..."
-    // even if the price or units at the end of the text string differ.
     String textSignature(String? fullText) {
       if (fullText == null || fullText.isEmpty) return '';
       return fullText.length > 15 ? fullText.substring(0, 15) : fullText;
@@ -167,8 +236,6 @@ class AppController extends GetxController with WidgetsBindingObserver {
 
     final String incomingSig = textSignature(event.text);
 
-    // Check if there is an existing alert in the vault with the same App, same Title, 
-    // and a matching text signature (e.g., matching stock ticker alerts)
     int duplicateIndex = collectedNotifications.indexWhere((existing) =>
       existing.packageName == event.packageName &&
       existing.title == event.title &&
@@ -176,13 +243,10 @@ class AppController extends GetxController with WidgetsBindingObserver {
     );
 
     if (duplicateIndex != -1) {
-      log('Duplicate ticker pattern detected. Replacing older entry with the latest update.');
-      // Remove the old notification so it doesn't clutter the history
+      log('Duplicate ticker pattern detected. Replacing older entry with latest update.');
       collectedNotifications.removeAt(duplicateIndex);
     }
 
-    // Append the fresh notification. Because our groupedNotifications getter 
-    // loops using .reversed, this latest one will seamlessly slide to the top!
     collectedNotifications.add(event); 
     collectedNotifications.refresh(); 
   }
@@ -194,11 +258,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
     try {
       log("Processing deep-intent routing logic for package: ${event.packageName}");
       
-      // FIX: Wipe it from the array immediately so it vanishes from the Vault UI on click
       collectedNotifications.remove(event);
       collectedNotifications.refresh();
 
-      // Try to open the original notification detail intent packet directly
       if (event.canTap == true) {
         bool success = await event.tap();
         if (success) {
@@ -207,7 +269,6 @@ class AppController extends GetxController with WidgetsBindingObserver {
         }
       }
       
-      // Fallback entrance launcher entry line
       log("Deep-link token expired or unavailable. Executing fallback launcher application entrance...");
       if (event.packageName != null) {
         await platform.invokeMethod('launchApp', event.packageName);
@@ -283,7 +344,6 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-    // --- DRAWER REALTIME FILTERS ---
   List<AppModel> get filteredApps {
     if (searchQuery.value.isEmpty) {
       return installedApps;
@@ -292,7 +352,64 @@ class AppController extends GetxController with WidgetsBindingObserver {
       app.name.toLowerCase().contains(searchQuery.value.toLowerCase())
     ).toList();
   }
+
+  // =================================================================
+  // PERMISSIONLESS LOCAL SCREEN TIME TRACKING
+  // =================================================================
   
+  /// Sets up platform handlers and initializes the countdown engine
+  void initLocalScreenTimeTracking() {
+    // 1. Establish the platform channel handler for native Android screen broadcast events
+    platform.setMethodCallHandler((call) async {
+      if (call.method == "onScreenStateChanged") {
+        final bool isScreenActive = call.arguments as bool;
+        _handleScreenStateUpdate(isScreenActive);
+      }
+    });
+
+    // 2. Baseline initialization configuration
+    _accumulatedSecondsToday = 0; 
+    
+    // 3. Fire up the periodic display ticker tracking engine
+    _startDisplayTicker();
+  }
+
+  void _handleScreenStateUpdate(bool isScreenActive) {
+    _isDeviceScreenOn = isScreenActive;
+    if (_isDeviceScreenOn) {
+      log("Device awake event caught. Resuming countdown calculations...");
+      _startDisplayTicker();
+    } else {
+      log("Device sleep event caught. Pausing countdown tracking...");
+      _tickerTimer?.cancel();
+    }
+  }
+
+  void _startDisplayTicker() {
+    _tickerTimer?.cancel(); // Clear old structural instances
+    
+    _tickerTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_isDeviceScreenOn) {
+        _accumulatedSecondsToday++;
+        _updateDisplayString();
+        
+        // Automatical count-reset protocol precisely at midnight midnight
+        final now = DateTime.now();
+        if (now.hour == 0 && now.minute == 0 && now.second == 0) {
+          _accumulatedSecondsToday = 0;
+        }
+      }
+    });
+  }
+
+  void _updateDisplayString() {
+    final duration = Duration(seconds: _accumulatedSecondsToday);
+    final hours = duration.inHours.toString().padLeft(2, '0');
+    final minutes = (duration.inMinutes % 60).toString().padLeft(2, '0');
+    // final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
+    // todayScreenTime.value = "$hours:$minutes:$seconds";
+    todayScreenTime.value = "$hours:$minutes";
+  }
 }
 
 class AppModel {

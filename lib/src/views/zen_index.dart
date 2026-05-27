@@ -155,10 +155,10 @@ class ZenIndex extends StatelessWidget {
                                       borderRadius: BorderRadius.circular(8),
                                       child: ColorFiltered(
                                         colorFilter: const ColorFilter.matrix(<double>[
-                                          0.2126, 0.7152, 0.0722, 0, 0, 
-                                          0.2126, 0.7152, 0.0722, 0, 0, 
-                                          0.2126, 0.7152, 0.0722, 0, 0, 
-                                          0,      0,      0,      0.35, 0, 
+                                          0.2126 + 0.1, 0.7152 + 0.1, 0.0722 + 0.1, 0, 15, // Increase red offset and slight gain
+                                          0.2126 + 0.1, 0.7152 + 0.1, 0.0722 + 0.1, 0, 15, // Increase green offset and slight gain
+                                          0.2126 + 0.1, 0.7152 + 0.1, 0.0722 + 0.1, 0, 15, // Increase blue offset and slight gain
+                                          0,      0,      0,      0.35, 0, // Preserve original opacity (35%)
                                         ]),
                                         child: app.iconBytes != null
                                             ? Image.memory(
@@ -182,11 +182,11 @@ class ZenIndex extends StatelessWidget {
                               
                               // --- CLEAN TYPOGRAPHY APP TITLE ---
                               Text(
-                                app.name.toLowerCase(),
+                                app.name,
                                 style: TextStyle(
-                                  color: Colors.grey[400],
+                                  color: Colors.white,
                                   fontSize: 16,
-                                  fontWeight: FontWeight.w300,
+                                  fontWeight: FontWeight.w500,
                                   letterSpacing: 0.3,
                                 ),
                               ),
@@ -198,6 +198,7 @@ class ZenIndex extends StatelessWidget {
                   );
                 }),
               ),
+
             ],
           ),
         ),
