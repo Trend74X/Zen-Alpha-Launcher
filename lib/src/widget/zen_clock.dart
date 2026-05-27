@@ -1,7 +1,8 @@
 import 'dart:async';
 
+import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart'; // Import for formatting
+import 'package:intl/intl.dart';
 
 class ZenClock extends StatefulWidget {
   const ZenClock({super.key});
@@ -12,13 +13,13 @@ class ZenClock extends StatefulWidget {
 
 class _ZenClockState extends State<ZenClock> {
   late Timer _timer;
-  String _timeString = "";
+  late DateTime _currentDateTime;
 
   @override
   void initState() {
     super.initState();
-    _timeString = _formatDateTime(DateTime.now());
-    // Update the clock every second
+    _currentDateTime = DateTime.now();
+    // Update the clock state dynamically every second
     _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) => _getTime());
   }
 
@@ -29,44 +30,91 @@ class _ZenClockState extends State<ZenClock> {
   }
 
   void _getTime() {
-    final DateTime timeNow = DateTime.now();
-    final String formattedDateTime = _formatDateTime(timeNow);
-    setState(() {
-      _timeString = formattedDateTime;
+    if (mounted) {
+      setState(() {
+        _currentDateTime = DateTime.now();
+      });
+    }
+  }
+
+  // Router Gateway: Opens standard Alarms matrix securely across different Android vendors
+  void _openClockApp() {
+    const intent = AndroidIntent(
+      action: 'android.intent.action.SET_ALARM',
+    );
+    intent.launch().catchError((e) {
+      // Fallback cluster sequence if standard SET_ALARM action is locked by the OEM
+      final commonClocks = [
+        'com.google.android.deskclock',
+        'com.sec.android.app.clockpackage',
+        'com.android.deskclock',
+        'com.miui.clock',
+      ];
+      for (var package in commonClocks) {
+        try {
+          AndroidIntent(
+            action: 'android.intent.action.MAIN',
+            category: 'android.intent.category.LAUNCHER',
+            package: package,
+          ).launch();
+          return;
+        } catch (_) {}
+      }
     });
   }
 
-  String formatDate(DateTime dateTime) {
-    // 'E' = Fri, 'd' = 5, 'MMM' = Sept
-    return DateFormat('E d, MMM').format(dateTime);
-  }
-
-  String _formatDateTime(DateTime dateTime) {
-    // 'HH:mm' gives 24-hour time. Use 'hh:mm' for 12-hour.
-    return DateFormat('HH:mm').format(dateTime);
+  // Router Gateway: Opens native system Calendar directly
+  void _openCalendarApp() {
+    const intent = AndroidIntent(
+      action: 'android.intent.action.MAIN',
+      category: 'android.intent.category.APP_CALENDAR',
+    );
+    intent.launch();
   }
 
   @override
   Widget build(BuildContext context) {
-    final DateTime now = DateTime.now();
+    // Generate layout string tokens based on your specific format guidelines
+    final String dateDisplayString = DateFormat('E d, MMM').format(_currentDateTime);
+    final String timeDisplayString = DateFormat('HH:mm').format(_currentDateTime);
+
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          DateFormat('E d, MMM').format(now),
-          style: TextStyle(
-            color: Colors.grey[400],
-            fontSize: 18,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 2,
+        // --- DATE STRING -> ROUTES TO CALENDAR ---
+        GestureDetector(
+          onTap: _openCalendarApp,
+          behavior: HitTestBehavior.opaque, // Ensures smooth interaction tracking on text surfaces
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 16.0),
+            child: Text(
+              dateDisplayString,
+              style: TextStyle(
+                color: Colors.grey[400],
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 2,
+              ),
+            ),
           ),
         ),
-        Text(
-          _timeString,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 100, // Large "Zen" style
-            fontWeight: FontWeight.w500, // Thin font for elegance
-            letterSpacing: -5,
+
+        // --- TIME STRING -> ROUTES TO CLOCK/ALARMS ---
+        GestureDetector(
+          onTap: _openClockApp,
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Text(
+              timeDisplayString,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 100, // Large "Zen" style completely preserved
+                fontWeight: FontWeight.w500, 
+                letterSpacing: -5,
+                height: 1.1, // Keeps the vertical composition layout completely uniform
+              ),
+            ),
           ),
         ),
       ],
