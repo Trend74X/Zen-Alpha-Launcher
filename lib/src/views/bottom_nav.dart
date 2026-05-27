@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:zen_launcher/src/views/zen_home.dart';
+import 'package:zen_launcher/src/views/zen_index.dart';
 import 'package:zen_launcher/src/views/zen_tools.dart';
 import 'package:zen_launcher/src/views/zen_vault.dart';
 
@@ -18,7 +19,7 @@ class _BottomNavState extends State<BottomNav> {
     ZenHome(),
     ZenVault(),
     ZenToolsPage(),
-    const Center(child: Text("INDEX PAGE", style: TextStyle(color: Colors.white))),
+    ZenIndex()
   ];
 
   @override
