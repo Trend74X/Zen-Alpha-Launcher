@@ -24,11 +24,18 @@ class AppController extends GetxController with WidgetsBindingObserver {
   // Track the raw port mapping to safely handle teardowns
   ReceivePort? _uiReceivePort;
 
+  // Reactive list containing all launcher-ready apps on the phone
+  var installedApps = <AppModel>[].obs;
+  var isLoadingApps = false.obs;
+  var searchQuery = ''.obs;
+  var showIcons = true.obs; // Defaults to true so toggle has a baseline state
+
   @override
   Future<void> onInit() async {
     super.onInit();
     WidgetsBinding.instance.addObserver(this);
     await startZenModeWorkflow();
+    await fetchInstalledApps();
   } 
 
   @override
@@ -47,7 +54,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
   }
 
   // =================================================================
-  // STEP 1 WORKHORSE: THE COMPUTED GROUPING MAP
+  // STEP 1 WORKHORSE: THE COMPUTED CHANNEL-GROUPING MAP
   // =================================================================
   /// GetX Reactive Getter that transforms our flat array into a map organized by package names.
   /// Iterating in reverse ensures the newest notifications bubble to the top of each group.
@@ -150,18 +157,34 @@ class AppController extends GetxController with WidgetsBindingObserver {
     log('Notification intercepted from: ${event.packageName}');
     if (event.title == null && event.text == null) return;
 
-    // Filter potential duplicate notifications arriving in rapid succession
-    bool alreadyExists = collectedNotifications.any((n) => 
-      n.packageName == event.packageName && 
-      n.title == event.title && 
-      n.text == event.text
+    // Helper to get a stable signature of the message string.
+    // Slicing the first 15 characters lets us match "NICA traded at..." with "NICA traded at..."
+    // even if the price or units at the end of the text string differ.
+    String textSignature(String? fullText) {
+      if (fullText == null || fullText.isEmpty) return '';
+      return fullText.length > 15 ? fullText.substring(0, 15) : fullText;
+    }
+
+    final String incomingSig = textSignature(event.text);
+
+    // Check if there is an existing alert in the vault with the same App, same Title, 
+    // and a matching text signature (e.g., matching stock ticker alerts)
+    int duplicateIndex = collectedNotifications.indexWhere((existing) =>
+      existing.packageName == event.packageName &&
+      existing.title == event.title &&
+      textSignature(existing.text) == incomingSig
     );
 
-    if (!alreadyExists) {
-      collectedNotifications.add(event); 
-      // Telling collectedNotifications to trigger will cascade updates straight to our grouped getter
-      collectedNotifications.refresh(); 
+    if (duplicateIndex != -1) {
+      log('Duplicate ticker pattern detected. Replacing older entry with the latest update.');
+      // Remove the old notification so it doesn't clutter the history
+      collectedNotifications.removeAt(duplicateIndex);
     }
+
+    // Append the fresh notification. Because our groupedNotifications getter 
+    // loops using .reversed, this latest one will seamlessly slide to the top!
+    collectedNotifications.add(event); 
+    collectedNotifications.refresh(); 
   }
 
   // =================================================================
@@ -171,6 +194,10 @@ class AppController extends GetxController with WidgetsBindingObserver {
     try {
       log("Processing deep-intent routing logic for package: ${event.packageName}");
       
+      // FIX: Wipe it from the array immediately so it vanishes from the Vault UI on click
+      collectedNotifications.remove(event);
+      collectedNotifications.refresh();
+
       // Try to open the original notification detail intent packet directly
       if (event.canTap == true) {
         bool success = await event.tap();
@@ -180,7 +207,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
         }
       }
       
-      // Fallback: If the intent token expired, use the MethodChannel entrance fallback
+      // Fallback entrance launcher entry line
       log("Deep-link token expired or unavailable. Executing fallback launcher application entrance...");
       if (event.packageName != null) {
         await platform.invokeMethod('launchApp', event.packageName);
@@ -190,26 +217,24 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-  // Clear out the whole Vault structure at once
   void clearAllNotifications() {
     collectedNotifications.clear();
     collectedNotifications.refresh();
     log("Zen Vault cleared out completely.");
   }
 
-  /// Fetches the real app name from Android OS or returns the cached string
+  // =================================================================
+  // NATIVE APP MANAGER UTILITIES
+  // =================================================================
   String getAppNameOf(String packageName) {
     if (packageName == 'UNKNOWN') return 'SYSTEM';
     
-    // If we already looked it up, return it instantly from memory
     if (appLabelCache.containsKey(packageName)) {
       return appLabelCache[packageName]!;
     }
 
-    // Otherwise, kick off an asynchronous background request to fetch it
     _fetchNativeAppLabel(packageName);
 
-    // While waiting for the native bridge to reply, provide a clean temporary fallback
     return packageName.split('.').reversed.firstWhere(
       (segment) => segment != 'android' && segment != 'app',
       orElse: () => 'APP'
@@ -221,13 +246,61 @@ class AppController extends GetxController with WidgetsBindingObserver {
       final String? realLabel = await platform.invokeMethod('getAppLabel', packageName);
       if (realLabel != null && realLabel.isNotEmpty) {
         appLabelCache[packageName] = realLabel.toUpperCase();
-        appLabelCache.refresh(); // Forces GetX UI elements to update with the pretty name
+        appLabelCache.refresh(); 
       }
     } catch (e) {
-      print("Failed to look up native app label for $packageName: $e");
+      log("Failed to look up native app label for $packageName: $e");
     }
   }
+
+  Future<void> fetchInstalledApps() async {
+    try {
+      isLoadingApps.value = true;
+      final List<dynamic>? rawApps = await platform.invokeMethod('getInstalledApps');
+      
+      if (rawApps != null) {
+        installedApps.value = rawApps.map((item) {
+          final Map<dynamic, dynamic> appMap = item as Map<dynamic, dynamic>;
+          return AppModel(
+            name: appMap['name'] ?? 'Unknown',
+            packageName: appMap['packageName'] ?? '',
+            iconBytes: appMap['icon'] as Uint8List?,
+          );
+        }).toList();
+      }
+    } catch (e) {
+      log("Error querying installed applications: $e");
+    } finally {
+      isLoadingApps.value = false;
+    }
+  }
+
+  Future<void> launchApplicationContainer(String packageName) async {
+    try {
+      await platform.invokeMethod('launchApp', packageName);
+    } catch (e) {
+      log("Could not open app $packageName: $e");
+    }
+  }
+
+    // --- DRAWER REALTIME FILTERS ---
+  List<AppModel> get filteredApps {
+    if (searchQuery.value.isEmpty) {
+      return installedApps;
+    }
+    return installedApps.where((app) => 
+      app.name.toLowerCase().contains(searchQuery.value.toLowerCase())
+    ).toList();
+  }
   
+}
+
+class AppModel {
+  final String name;
+  final String packageName;
+  final Uint8List? iconBytes;
+
+  AppModel({required this.name, required this.packageName, this.iconBytes});
 }
 
 // =================================================================

@@ -42,18 +42,47 @@ class ZenVault extends StatelessWidget {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // --- VAULT HEADER TITLE ---
+                // --- VAULT HEADER TITLE & CLEAR ACTION ROW ---
                 Padding(
-                  padding: const EdgeInsets.only(top: 28.0, left: 16.0, bottom: 24.0),
-                  child: const Text(
-                    'Notification Vault',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 48,
-                      fontWeight: FontWeight.w900,
-                      height: 0.9,
-                      letterSpacing: -1,
-                    ),
+                  padding: const EdgeInsets.only(top: 28.0, left: 16.0, right: 16.0, bottom: 24.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: const Text(
+                          'Notification Vault',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 44, // Slightly adjusted size to sit elegantly next to the button
+                            fontWeight: FontWeight.w900,
+                            height: 0.9,
+                            letterSpacing: -1,
+                          ),
+                        ),
+                      ),
+                      
+                      // --- MINIMALIST ZEN CLEAR BUTTON ---
+                      TextButton(
+                        onPressed: () {
+                          // Triggers the master clear workflow we already have in AppController
+                          controller.clearAllNotifications();
+                        },
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text(
+                          'CLEAR ALL',
+                          style: TextStyle(
+                            color: Color(0xFF595959), // Muted dark grey so it doesn't grab attention
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 
@@ -75,7 +104,7 @@ class ZenVault extends StatelessWidget {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.grey[900],
+                              color: const Color(0xFF1A1A1A), // Fixed null color crash
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
@@ -95,8 +124,8 @@ class ZenVault extends StatelessWidget {
                             shrinkWrap: true, 
                             physics: const NeverScrollableScrollPhysics(), 
                             itemCount: notificationsForApp.length,
-                            separatorBuilder: (context, childIndex) => Divider(
-                              color: Colors.grey[900], 
+                            separatorBuilder: (context, childIndex) => const Divider(
+                              color: Color(0xFF1A1A1A), // Fixed null color crash
                               height: 16,
                             ),
                             itemBuilder: (context, childIndex) {
@@ -116,7 +145,7 @@ class ZenVault extends StatelessWidget {
                                 },
                                 child: InkWell(
                                   onTap: () => controller.openNotificationTargetApp(item),
-                                  splashColor: Colors.grey[900],
+                                  splashColor: const Color(0xFF1A1A1A), // Fixed null color crash
                                   child: Padding(
                                     padding: const EdgeInsets.symmetric(vertical: 6.0),
                                     child: Row(
@@ -126,7 +155,7 @@ class ZenVault extends StatelessWidget {
                                         Container(
                                           width: 2,
                                           height: 38,
-                                          color: Colors.grey[800],
+                                          color: const Color(0xFF262626), // Fixed null color crash
                                           margin: const EdgeInsets.only(right: 12, top: 2),
                                         ),
                                         Expanded(
@@ -153,8 +182,8 @@ class ZenVault extends StatelessWidget {
                                                   // SUBTLE TIMESTAMP DISPLAY
                                                   Text(
                                                     _formatNotificationTime(item.createAt),
-                                                    style: TextStyle(
-                                                      color: Colors.grey[700], // Muted colors keep the look clean
+                                                    style: const TextStyle(
+                                                      color: Color(0xFF595959), // Fixed null color crash
                                                       fontSize: 11, 
                                                       fontWeight: FontWeight.w300
                                                     ),
@@ -185,7 +214,7 @@ class ZenVault extends StatelessWidget {
                   ),
                 ),
 
-                SizedBox(height: 80)
+                const SizedBox(height: 80)
               ],
             );
           }),
@@ -196,8 +225,6 @@ class ZenVault extends StatelessWidget {
 
   String _formatNotificationTime(DateTime? dateTime) {
     if (dateTime == null) return '';
-    // Formats time as "3:45 PM" or "14:20" based on system settings
     return DateFormat.jm().format(dateTime); 
   }
-
 }
