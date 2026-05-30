@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:zen_launcher/src/controller/app_controller.dart';
+import 'package:zen_launcher/src/widget/hidden_apps.dart';
 
 class ZenToolsPage extends StatelessWidget {
   const ZenToolsPage({super.key});
@@ -58,6 +59,22 @@ class ZenToolsPage extends StatelessWidget {
                       'Hard-lock distracting applications.', 
                       controller.appTimersActive.value, 
                       (newValue) => controller.toggleAppTimers(newValue),
+                    ),
+                    
+                    buildNavigationSetting(
+                      title: 'Hidden Applications',
+                      subtitle: 'Apps filtered out of your daily awareness loops.',
+                      onTap: () async {
+                        // 1. Fire up the secure lockscreen credential gate
+                        final bool isAuthorized = await controller.authenticateUserSecurely(
+                          reason: 'AUTHENTICATE PROTOCOL TO ENTER HIDDEN VAULT ENVIRONMENT',
+                        );
+
+                        // 2. Clear context checkpoint safety rules before sliding up the sheets panel
+                        if (isAuthorized && context.mounted) {
+                          showHiddenAppsManagementSheet(context);
+                        }
+                      },
                     ),
                   ],
                 )),
@@ -141,6 +158,73 @@ class ZenToolsPage extends StatelessWidget {
           Text(label, style: const TextStyle(color: Colors.grey, fontSize: 10, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
           Text(value, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget buildNavigationSetting({
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 32.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // --- TEXT LAYOUT LABEL FRAME ---
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title, 
+                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle, 
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          
+          // --- ZEN MINIMALIST ACTION CARD TRIGGER ---
+          GestureDetector(
+            onTap: onTap, 
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black,
+                border: Border.all(
+                  color: const Color(0xFF262626), // Subdued structural slate border outline
+                  width: 2,
+                ),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'VIEW',
+                    style: TextStyle(
+                      color: Colors.white, 
+                      fontSize: 10, 
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                  SizedBox(width: 4),
+                  Icon(
+                    Icons.arrow_forward, 
+                    color: Colors.white, 
+                    size: 10,
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );

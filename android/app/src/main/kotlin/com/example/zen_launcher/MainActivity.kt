@@ -15,12 +15,12 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.WindowManager
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 
-class MainActivity: FlutterActivity() {
+class MainActivity: FlutterFragmentActivity() {
     private val CHANNEL = "com.zen_launcher/battery"
     private var screenReceiver: BroadcastReceiver? = null
 
@@ -48,23 +48,24 @@ class MainActivity: FlutterActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
-                        // Pass true to Flutter -> Screen is active, resume counting
                         channel.invokeMethod("onScreenStateChanged", true)
                     }
                     Intent.ACTION_SCREEN_OFF -> {
-                        // Pass false to Flutter -> Screen went dark, pause counting
                         channel.invokeMethod("onScreenStateChanged", false)
                     }
                 }
             }
         }
-        context.registerReceiver(screenReceiver, filter)
+        
+        // --- FIXED: Swapped 'context.' out for explicit 'this.' binding context ---
+        this.registerReceiver(screenReceiver, filter)
 
         // ---------------------------------------------------------------------
         // STANDARD ROUTING METHOD PLATFORM CALLS HANDLER
         // ---------------------------------------------------------------------
         channel.setMethodCallHandler { call, result ->
-            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // --- FIXED: Use explicit activity context reference here to avoid compilation collisions ---
+            val notificationManager = this.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
             when (call.method) {
                 "isDNDEnabled" -> {
@@ -100,7 +101,7 @@ class MainActivity: FlutterActivity() {
                         val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        context.startActivity(intent)
+                        this.startActivity(intent)
                         result.success(true)
                     } else {
                         result.success(false)
@@ -202,11 +203,10 @@ class MainActivity: FlutterActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Prevent background memory leaks by cleanly clearing out the dynamic broadcast filter on destroy
         try {
-            screenReceiver?.let { context.unregisterReceiver(it) }
+            screenReceiver?.let { this.unregisterReceiver(it) }
         } catch (e: Exception) {
-            // Already unregistered context gracefully
+            // Already unregistered gracefully
         }
     }
 

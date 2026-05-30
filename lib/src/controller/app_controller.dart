@@ -9,33 +9,38 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_notification_listener_plus/flutter_notification_listener_plus.dart';
 import 'package:get/get.dart';
+import 'package:local_auth/local_auth.dart';
+// ignore: depend_on_referenced_packages
+import 'package:local_auth_android/local_auth_android.dart';
 
 class AppController extends GetxController with WidgetsBindingObserver {
   final dndPlugin = DoNotDisturbPlugin();
+  final localAuth = LocalAuthentication();
   
-    // Single unified method channel matching your MainActivity.kt definition
+  // Single unified method channel matching your MainActivity.kt definition
   static const platform = MethodChannel('com.zen_launcher/battery');
 
-    // --- GETX OBSERVABLE STATES ---
+  // --- GETX OBSERVABLE STATES ---
   var isListenerRunning = false.obs;
   var isDndActive       = false.obs;  // Connected directly to the custom environment panel toggle
   var appTimersActive   = false.obs;  // Connected directly to the custom environment panel toggle
   
-    // Master thread-safe list of notifications intercepted by the platform
+  // Master thread-safe list of notifications intercepted by the platform
   var collectedNotifications = <NotificationEvent>[].obs;
   var appLabelCache          = <String, String>{}.obs;
 
-    // --- USER CONTROLLER SCREEN CLOCK OBSERVABLES ---
+  // --- USER CONTROLLER SCREEN CLOCK OBSERVABLES ---
   var todayScreenTime = "00:00:00".obs;
   Timer? _tickerTimer;
   int  _accumulatedSecondsToday = 0;     // Cumulative active seconds for the day
   bool _isDeviceScreenOn        = true;  // Track state to manage background counting
 
-    // Track the raw port mapping to safely handle teardowns
+  // Track the raw port mapping to safely handle teardowns
   ReceivePort? _uiReceivePort;
 
-    // Reactive list containing all launcher-ready apps on the phone
+  // Reactive list containing all launcher-ready apps on the phone
   var installedApps = <AppModel>[].obs;
+  var hiddenAppPackages = <String>{}.obs;
   var isLoadingApps = false.obs;
   var searchQuery   = ''.obs;
   var showIcons     = true.obs;          // Defaults to true so toggle has a baseline state
@@ -316,7 +321,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
 
   Future<void> fetchInstalledApps() async {
     try {
-            isLoadingApps.value    = true;
+      isLoadingApps.value    = true;
       final List<dynamic>? rawApps = await platform.invokeMethod('getInstalledApps');
       
       if (rawApps != null) {
@@ -336,21 +341,40 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
+  /// Adds an application package name to the hidden vault configuration
+  void hideApplication(String packageName) {
+    hiddenAppPackages.add(packageName);
+    hiddenAppPackages.refresh();
+    log("Application structural footprint hidden from matrix: $packageName");
+  }
+
+  /// Removes an application package from the hidden list, making it visible again
+  void revealApplication(String packageName) {
+    hiddenAppPackages.remove(packageName);
+    hiddenAppPackages.refresh();
+    log("Application context revealed back to main space: $packageName");
+  }
+
+  /// Overrides your previous getter to filter out hidden apps automatically
+  List<AppModel> get filteredApps {
+    // 1. Filter out any package that exists within our hidden apps set
+    final visibleApps = installedApps.where((app) => !hiddenAppPackages.contains(app.packageName));
+
+    // 2. Apply your existing text search query filter if the user is typing
+    if (searchQuery.value.isEmpty) {
+      return visibleApps.toList();
+    }
+    return visibleApps.where((app) => 
+      app.name.toLowerCase().contains(searchQuery.value.toLowerCase())
+    ).toList();
+  }
+
   Future<void> launchApplicationContainer(String packageName) async {
     try {
       await platform.invokeMethod('launchApp', packageName);
     } catch (e) {
       log("Could not open app $packageName: $e");
     }
-  }
-
-  List<AppModel> get filteredApps {
-    if (searchQuery.value.isEmpty) {
-      return installedApps;
-    }
-    return installedApps.where((app) => 
-      app.name.toLowerCase().contains(searchQuery.value.toLowerCase())
-    ).toList();
   }
 
   // =================================================================
@@ -401,7 +425,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
       }
     });
   }
-  
+
   void clearNotificationsForPackage(String packageName) {
     collectedNotifications.removeWhere((event) => event.packageName == packageName);
     collectedNotifications.refresh();
@@ -415,6 +439,35 @@ class AppController extends GetxController with WidgetsBindingObserver {
       // final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
       // todayScreenTime.value = "$hours:$minutes:$seconds";
     todayScreenTime.value = "$hours:$minutes";
+  }
+
+  /// Requests hardware biometrics or device PIN credentials to unlock components
+  Future<bool> authenticateUserSecurely({required String reason}) async {
+    try {
+      final bool canAuthenticateWithBiometrics = await localAuth.canCheckBiometrics;
+      final bool isDeviceSupported = await localAuth.isDeviceSupported();
+      
+      if (!canAuthenticateWithBiometrics && !isDeviceSupported) {
+        log("Security Layer Error: Device lacks biometric or lockscreen credential setups.");
+        return false;
+      }
+
+      // Updated syntax matching latest local_auth API layout standards
+      final bool didAuthenticateSuccessfully = await localAuth.authenticate(
+        localizedReason: reason,
+        authMessages: const <AuthMessages>[
+          AndroidAuthMessages(
+            signInTitle: 'ARCHITECTURAL UNLOCK',
+            cancelButton: 'CANCEL',
+          ),
+        ],
+      );
+
+      return didAuthenticateSuccessfully;
+    } catch (error) {
+      log("Authentication exception intercepted: $error");
+      return false; 
+    }
   }
 
 }

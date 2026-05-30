@@ -77,28 +77,28 @@ class ZenIndex extends StatelessWidget {
 
                     // --- VISIBILITY CONFIG TOGGLE ICON ---
                     Obx(() => InkWell(
-                          onTap: () => controller.showIcons.toggle(),
+                      onTap: () => controller.showIcons.toggle(),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        height: 44,
+                        width: 44,
+                        decoration: BoxDecoration(
+                          color: controller.showIcons.value ? const Color(0xFF0D0D0D) : Colors.transparent,
                           borderRadius: BorderRadius.circular(8),
-                          child: Container(
-                            height: 44,
-                            width: 44,
-                            decoration: BoxDecoration(
-                              color: controller.showIcons.value ? const Color(0xFF0D0D0D) : Colors.transparent,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: const Color(0xFF262626), 
-                                width: 1
-                              ),
-                            ),
-                            child: Icon(
-                              controller.showIcons.value 
-                                  ? Icons.visibility_outlined 
-                                  : Icons.visibility_off_outlined,
-                              color: controller.showIcons.value ? Colors.white70 : const Color(0xFF595959), // Replaces grey[800]
-                              size: 18,
-                            ),
+                          border: Border.all(
+                            color: const Color(0xFF262626), 
+                            width: 1
                           ),
-                        )),
+                        ),
+                        child: Icon(
+                          controller.showIcons.value 
+                              ? Icons.visibility_outlined 
+                              : Icons.visibility_off_outlined,
+                          color: controller.showIcons.value ? Colors.white70 : const Color(0xFF595959), // Replaces grey[800]
+                          size: 18,
+                        ),
+                      ),
+                    )),
                   ],
                 ),
               ),
@@ -136,6 +136,7 @@ class ZenIndex extends StatelessWidget {
                           FocusScope.of(context).unfocus();
                           controller.launchApplicationContainer(app.packageName);
                         },
+                        onLongPress: () => hideAppsDialog(context: context, app: app),
                         splashColor: Colors.transparent,
                         highlightColor: const Color(0xFF0D0D0D),
                         child: Padding(
@@ -205,4 +206,28 @@ class ZenIndex extends StatelessWidget {
       ),
     );
   }
+}
+Future<dynamic> hideAppsDialog({required BuildContext context, dynamic app}) {
+  return showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      backgroundColor: Colors.black,
+      shape: const LinearBorder(), // Clean, sharp edges matching Zen architecture
+      title: Text('ARCHITECTURAL FOCUS', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1)),
+      content: Text('Do you want to hide ${app.name.toUpperCase()} from index?', style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('CANCEL', style: TextStyle(color: Colors.grey[600], fontSize: 11, fontWeight: FontWeight.bold)),
+        ),
+        TextButton(
+          onPressed: () {
+            Get.find<AppController>().hideApplication(app.packageName);
+            Navigator.pop(context);
+          },
+          child: const Text('HIDE APP', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+        ),
+      ],
+    ),
+  );
 }
