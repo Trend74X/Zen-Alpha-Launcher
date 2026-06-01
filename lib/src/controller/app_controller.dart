@@ -17,35 +17,37 @@ class AppController extends GetxController with WidgetsBindingObserver {
   final dndPlugin = DoNotDisturbPlugin();
   final localAuth = LocalAuthentication();
   
-  // Single unified method channel matching your MainActivity.kt definition
+  // --- PLATFORM COMMUNICATION GATEWAYS ---
   static const platform = MethodChannel('com.zen_launcher/battery');
+  static const MethodChannel notificationChannel = MethodChannel('com.zen_launcher/notifications');
 
-  // --- GETX OBSERVABLE STATES ---
+  // --- GETX REACTIVE STATE VARIABLES ---
   var isListenerRunning = false.obs;
-  var isDndActive       = false.obs;  // Connected directly to the custom environment panel toggle
-  var appTimersActive   = false.obs;  // Connected directly to the custom environment panel toggle
+  var isDndActive       = false.obs;
+  var appTimersActive   = false.obs;
+  var isScreenOn        = true.obs;
   
-  // Master thread-safe list of notifications intercepted by the platform
+  // Master thread-safe collection of notifications displayed in Zen view layers
   var collectedNotifications = <NotificationEvent>[].obs;
   var appLabelCache          = <String, String>{}.obs;
 
-  // --- USER CONTROLLER SCREEN CLOCK OBSERVABLES ---
-  var todayScreenTime = "00:00:00".obs;
+  // --- USER WORKSPACE CLOCK METRICS ---
+  var todayScreenTime = "00:00".obs;
   Timer? _tickerTimer;
-  int  _accumulatedSecondsToday = 0;     // Cumulative active seconds for the day
-  bool _isDeviceScreenOn        = true;  // Track state to manage background counting
+  int  _accumulatedSecondsToday = 0;     
+  bool _isDeviceScreenOn        = true;  
 
-  // Track the raw port mapping to safely handle teardowns
+  // Native hardware platform port pipeline communication memory trace
   ReceivePort? _uiReceivePort;
 
-  // Reactive list containing all launcher-ready apps on the phone
+  // --- APPLICATION REPOS & VAULTS ---
   var installedApps = <AppModel>[].obs;
   var hiddenAppPackages = <String>{}.obs;
   var isLoadingApps = false.obs;
   var searchQuery   = ''.obs;
-  var showIcons     = true.obs;          // Defaults to true so toggle has a baseline state
+  var showIcons     = true.obs;          
 
-  // Stores the unique Android package names of apps pinned to the home screen
+  // --- DYNAMIC WORKSPACE SLOTS (MAX 6 CUSTOM ADDS) ---
   var pinnedHomeApps = <String>[].obs;
 
   @override
@@ -53,11 +55,11 @@ class AppController extends GetxController with WidgetsBindingObserver {
     super.onInit();
     WidgetsBinding.instance.addObserver(this);
     
-      // Core Launcher Workflows
+    // Core Launcher Lifecycle Initialization Hooks
     await startZenModeWorkflow();
     await fetchInstalledApps();
     
-      // Initialize Permissionless Local Screen Tracking
+    // Fire Up Local Screen Activity Trackers
     initLocalScreenTimeTracking();
   } 
 
@@ -66,6 +68,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _uiReceivePort?.close();
     _tickerTimer?.cancel();
+    IsolateNameServer.removePortNameMapping("_listener_");
     super.onClose();
   }
 
@@ -77,10 +80,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-    // =================================================================
-    // COMPUTED CHANNEL-GROUPING MAP
-    // =================================================================
-    /// GetX Reactive Getter that transforms our flat array into a map organized by package names.
+  // =================================================================
+  // REACTIVE COMPUTED CHANNEL-GROUPING PROPERTIES
+  // =================================================================
   Map<String, List<NotificationEvent>> get groupedNotifications {
     final Map<String, List<NotificationEvent>> groups = {};
     
@@ -95,9 +97,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
     return groups;
   }
 
-    // =================================================================
-    // PERMISSION & CORE LAUNCHER LIFECYCLE FLOWS
-    // =================================================================
+  // =================================================================
+  // PERMISSION & SYSTEM WORKFLOW BOOTSTRAPPERS
+  // =================================================================
   Future<void> startZenModeWorkflow() async {
     bool hasListenerPermission = (await NotificationsListener.hasPermission) ?? false;
     if (!hasListenerPermission) {
@@ -106,7 +108,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
       return; 
     }
 
-      // Sync current native Do Not Disturb status flags on app startup
+    // Sync current native hardware DND status flags on app startup
     await checkCurrentDndStatus();
     await checkAndRequestBatteryExemption();
     await initializeNotificationCollector();
@@ -127,21 +129,18 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-    // =================================================================
-    // ENVIRONMENT STATE PROGRAMMATIC CONTROLLERS
-    // =================================================================
-
-    /// Queries the native Android layer via method channel to see if DND is active
+  // =================================================================
+  // PROGRAMMATIC DO NOT DISTURB & ENVIRONMENT CONFIGURATORS
+  // =================================================================
   Future<void> checkCurrentDndStatus() async {
     try {
       final bool systemDndActive = await platform.invokeMethod('isDNDEnabled');
-            isDndActive.value    = systemDndActive;
+      isDndActive.value    = systemDndActive;
     } catch (e) {
       log("Failed to fetch native DND status profile mapping: $e");
     }
   }
 
-    /// Triggers a native system invocation request to switch Do Not Disturb states
   Future<void> toggleDoNotDisturb(BuildContext context, bool targetState) async {
     try {
       final bool success = await platform.invokeMethod('setDNDMode', {'enabled': targetState});
@@ -150,18 +149,15 @@ class AppController extends GetxController with WidgetsBindingObserver {
       }
     } on PlatformException catch (e) {
       if (e.code == 'MISSING_PERMISSION') {
-          // ignore: use_build_context_synchronously
         _showDndPermissionDialog(context);
       }
     }
   }
 
-    /// Adjusts the tracking configuration state for the environment App Timers interface
   void toggleAppTimers(bool targetState) {
     appTimersActive.value = targetState;
   }
 
-    /// Triggers a direct platform gateway lookup to launch the native system DND access panel
   Future<void> openDNDSettings() async {
     try {
       await platform.invokeMethod('openDNDPermissionSettings');
@@ -170,14 +166,13 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-    /// Prompting layout dialog asking the user to grant Notification Policy Access permissions
   void _showDndPermissionDialog(BuildContext context) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.black,
-        shape          : const LinearBorder(),   // Un-rounded sharp edge minimalist window frame
-        title          : const Text(
+        shape: const LinearBorder(),   
+        title: const Text(
           'SYSTEM PERMISSION REQUIRED', 
           style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 1),
         ),
@@ -188,7 +183,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child    : Text('CANCEL', style: TextStyle(color: Colors.grey[600], fontSize: 12, fontWeight: FontWeight.bold)),
+            child: Text('CANCEL', style: TextStyle(color: Colors.grey[600], fontSize: 12, fontWeight: FontWeight.bold)),
           ),
           TextButton(
             onPressed: () async {
@@ -202,9 +197,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
     );
   }
 
-    // =================================================================
-    // NOTIFICATION BACKGROUND ROUTING MANAGEMENT
-    // =================================================================
+  // =================================================================
+  // ISOLATED PORT LISTENER NOTIFICATION PIPELINE
+  // =================================================================
   Future<void> initializeNotificationCollector() async {
     await NotificationsListener.initialize(callbackHandle: backgroundNotificationHandler);
     
@@ -223,8 +218,8 @@ class AppController extends GetxController with WidgetsBindingObserver {
     if (!isServiceRunning) {
       log("System notification tracking engine inactive. Starting service context...");
       await NotificationsListener.startService(
-        foreground : true,
-        title      : "Zen Focus Active",
+        foreground: true,
+        title: "Zen Focus Active",
         description: "Filtering background distractions...",
       );
     }
@@ -234,12 +229,21 @@ class AppController extends GetxController with WidgetsBindingObserver {
   }
 
   void _handleIncomingUiNotification(NotificationEvent event) {
-    log('Notification intercepted from: ${event.packageName}');
-    if (event.title == null && event.text == null) return;
+    // Safety Catch: Prevent null crashes or unwanted low-priority platform loops
+    if (event.packageName == null || (event.title == null && event.text == null)) return;
+
+    // Double Safeguard: Filter package drops out of UI parsing structures if background handler leaks them
+    final blockedPackages = const ['android', 'com.android.systemui', 'com.google.android.inputmethod.latin'];
+    if (blockedPackages.contains(event.packageName!.toLowerCase())) {
+      log("UI thread intercepted and discarded a low-priority system package leakage.");
+      return; 
+    }
+
+    log('Notification parsed into UI pipeline from: ${event.packageName}');
 
     String textSignature(String? fullText) {
       if (fullText == null || fullText.isEmpty) return '';
-      return fullText.length > 15 ? fullText.substring(0, 15): fullText;
+      return fullText.length > 15 ? fullText.substring(0, 15) : fullText;
     }
 
     final String incomingSig = textSignature(event.text);
@@ -259,9 +263,6 @@ class AppController extends GetxController with WidgetsBindingObserver {
     collectedNotifications.refresh(); 
   }
 
-    // =================================================================
-    // DEEP LINK NAVIGATION DISPATCHER
-    // =================================================================
   Future<void> openNotificationTargetApp(NotificationEvent event) async {
     try {
       log("Processing deep-intent routing logic for package: ${event.packageName}");
@@ -292,9 +293,15 @@ class AppController extends GetxController with WidgetsBindingObserver {
     log("Zen Vault cleared out completely.");
   }
 
-    // =================================================================
-    // NATIVE APP MANAGER UTILITIES
-    // =================================================================
+  void clearNotificationsForPackage(String packageName) {
+    collectedNotifications.removeWhere((event) => event.packageName == packageName);
+    collectedNotifications.refresh();
+    log("Cleared all notification event allocations for package: $packageName");
+  }
+
+  // =================================================================
+  // APPLICATION ENGINE METADATA PARSERS & GENERATORS
+  // =================================================================
   String getAppNameOf(String packageName) {
     if (packageName == 'UNKNOWN') return 'SYSTEM';
     
@@ -305,8 +312,8 @@ class AppController extends GetxController with WidgetsBindingObserver {
     _fetchNativeAppLabel(packageName);
 
     return packageName.split('.').reversed.firstWhere(
-             (segment) => segment != 'android' && segment != 'app',
-      orElse: ()       => 'APP'
+      (segment) => segment != 'android' && segment != 'app',
+      orElse: () => 'APP'
     ).toUpperCase();
   }
 
@@ -324,16 +331,16 @@ class AppController extends GetxController with WidgetsBindingObserver {
 
   Future<void> fetchInstalledApps() async {
     try {
-      isLoadingApps.value    = true;
+      isLoadingApps.value = true;
       final List<dynamic>? rawApps = await platform.invokeMethod('getInstalledApps');
       
       if (rawApps != null) {
         installedApps.value = rawApps.map((item) {
           final Map<dynamic, dynamic> appMap = item as Map<dynamic, dynamic>;
           return AppModel(
-            name       : appMap['name'] ?? 'Unknown',
+            name: appMap['name'] ?? 'Unknown',
             packageName: appMap['packageName'] ?? '',
-            iconBytes  : appMap['icon'] as Uint8List?,
+            iconBytes: appMap['icon'] as Uint8List?,
           );
         }).toList();
       }
@@ -344,26 +351,24 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-  /// Adds an application package name to the hidden vault configuration
+  // =================================================================
+  // PRIVATE SECURITY SECURE VAULT ENGINE (HIDDEN APPLICATIONS)
+  // =================================================================
   void hideApplication(String packageName) {
     hiddenAppPackages.add(packageName);
     hiddenAppPackages.refresh();
     log("Application structural footprint hidden from matrix: $packageName");
   }
 
-  /// Removes an application package from the hidden list, making it visible again
   void revealApplication(String packageName) {
     hiddenAppPackages.remove(packageName);
     hiddenAppPackages.refresh();
     log("Application context revealed back to main space: $packageName");
   }
 
-  /// Overrides your previous getter to filter out hidden apps automatically
   List<AppModel> get filteredApps {
-    // 1. Filter out any package that exists within our hidden apps set
     final visibleApps = installedApps.where((app) => !hiddenAppPackages.contains(app.packageName));
 
-    // 2. Apply your existing text search query filter if the user is typing
     if (searchQuery.value.isEmpty) {
       return visibleApps.toList();
     }
@@ -381,12 +386,44 @@ class AppController extends GetxController with WidgetsBindingObserver {
   }
 
   // =================================================================
-  // PERMISSIONLESS LOCAL SCREEN TIME TRACKING
+  // DYNAMIC HOME SCREEN ADDITIONS SLOTS (MAX 6 EXTRA SLOTS)
   // =================================================================
+  bool isAppPinnedToHome(String packageName) {
+    return pinnedHomeApps.contains(packageName);
+  }
 
-  /// Sets up platform handlers and initializes the countdown engine
+  void pinAppToHome(String packageName) {
+    if (!pinnedHomeApps.contains(packageName)) {
+      // STRICT CAP GUARD: Phone and Messages are hardcoded, allow exactly 6 dynamic links max
+      if (pinnedHomeApps.length < 6) { 
+        pinnedHomeApps.add(packageName);
+        pinnedHomeApps.refresh();
+        log("App pinned to home workspace canvas: $packageName");
+      } else {
+        Get.snackbar(
+          'WORKSPACE SATURATED',
+          'Maximum allocation capacity reached (6 apps max).',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.black,
+          colorText: Colors.white,
+          borderRadius: 0,
+        );
+      }
+    }
+  }
+
+  void unpinAppFromHome(String packageName) {
+    if (pinnedHomeApps.contains(packageName)) {
+      pinnedHomeApps.remove(packageName);
+      pinnedHomeApps.refresh();
+      log("App pulled off home workspace canvas: $packageName");
+    }
+  }
+
+  // =================================================================
+  // SCREEN ACTIVATION TRACKING (METRIC LOGGERS)
+  // =================================================================
   void initLocalScreenTimeTracking() {
-      // 1. Establish the platform channel handler for native Android screen broadcast events
     platform.setMethodCallHandler((call) async {
       if (call.method == "onScreenStateChanged") {
         final bool isScreenActive = call.arguments as bool;
@@ -394,15 +431,13 @@ class AppController extends GetxController with WidgetsBindingObserver {
       }
     });
 
-      // 2. Baseline initialization configuration
     _accumulatedSecondsToday = 0;
-    
-      // 3. Fire up the periodic display ticker tracking engine
     _startDisplayTicker();
   }
 
   void _handleScreenStateUpdate(bool isScreenActive) {
     _isDeviceScreenOn = isScreenActive;
+    isScreenOn.value = isScreenActive;
     if (_isDeviceScreenOn) {
       log("Device awake event caught. Resuming countdown calculations...");
       _startDisplayTicker();
@@ -413,14 +448,13 @@ class AppController extends GetxController with WidgetsBindingObserver {
   }
 
   void _startDisplayTicker() {
-    _tickerTimer?.cancel();  // Clear old structural instances
+    _tickerTimer?.cancel();  
     
     _tickerTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_isDeviceScreenOn) {
         _accumulatedSecondsToday++;
         _updateDisplayString();
         
-          // Automatical count-reset protocol precisely at midnight midnight
         final now = DateTime.now();
         if (now.hour == 0 && now.minute == 0 && now.second == 0) {
           _accumulatedSecondsToday = 0;
@@ -429,34 +463,24 @@ class AppController extends GetxController with WidgetsBindingObserver {
     });
   }
 
-  void clearNotificationsForPackage(String packageName) {
-    collectedNotifications.removeWhere((event) => event.packageName == packageName);
-    collectedNotifications.refresh();
-    log("Cleared all notification event allocations for package: $packageName");
-  }
-
   void _updateDisplayString() {
     final duration = Duration(seconds: _accumulatedSecondsToday);
     final hours    = duration.inHours.toString().padLeft(2, '0');
     final minutes  = (duration.inMinutes % 60).toString().padLeft(2, '0');
-      // final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
-      // todayScreenTime.value = "$hours:$minutes:$seconds";
     todayScreenTime.value = "$hours:$minutes";
   }
 
-  /// Requests hardware biometrics or device PIN credentials to unlock components
   Future<bool> authenticateUserSecurely({required String reason}) async {
     try {
       final bool canAuthenticateWithBiometrics = await localAuth.canCheckBiometrics;
       final bool isDeviceSupported = await localAuth.isDeviceSupported();
       
       if (!canAuthenticateWithBiometrics && !isDeviceSupported) {
-        log("Security Layer Error: Device lacks biometric or lockscreen credential setups.");
+        log("Security Layer Error: Device lacks lockscreen credential validation setups.");
         return false;
       }
 
-      // Updated syntax matching latest local_auth API layout standards
-      final bool didAuthenticateSuccessfully = await localAuth.authenticate(
+      return await localAuth.authenticate(
         localizedReason: reason,
         authMessages: const <AuthMessages>[
           AndroidAuthMessages(
@@ -465,50 +489,11 @@ class AppController extends GetxController with WidgetsBindingObserver {
           ),
         ],
       );
-
-      return didAuthenticateSuccessfully;
     } catch (error) {
       log("Authentication exception intercepted: $error");
       return false; 
     }
   }
-
-  /// Checks if a specific app package is pinned to the home screen canvas
-  bool isAppPinnedToHome(String packageName) {
-    return pinnedHomeApps.contains(packageName);
-  }
-
-  /// Pins an app to the home screen from the index page with a hard cap layout guard
-  void pinAppToHome(String packageName) {
-    if (!pinnedHomeApps.contains(packageName)) {
-      // HARD CAP LAYOUT GUARD: Enforce a strict 8-app maximum limit
-      if (pinnedHomeApps.length < 8) { 
-        pinnedHomeApps.add(packageName);
-        pinnedHomeApps.refresh();
-        log("App pinned to home workspace: $packageName");
-      } else {
-        // Fallback fallback warning indicator if the guard fails
-        Get.snackbar(
-          'WORKSPACE SATURATED',
-          'Maximum layout capacity reached (8 apps max).',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: Colors.black,
-          colorText: Colors.white,
-          borderRadius: 0,
-        );
-      }
-    }
-  }
-
-  /// Removes a pinned app from the home screen canvas
-  void unpinAppFromHome(String packageName) {
-    if (pinnedHomeApps.contains(packageName)) {
-      pinnedHomeApps.remove(packageName);
-      pinnedHomeApps.refresh();
-      log("App unpinned from home workspace: $packageName");
-    }
-  }
-
 }
 
 class AppModel {
@@ -519,17 +504,28 @@ class AppModel {
   AppModel({required this.name, required this.packageName, this.iconBytes});
 }
 
-  // =================================================================
-  // ISOLATE ENTRY POINT HANDLER
-  // =================================================================
+// =================================================================
+// ISOLATE BACKGROUND ENTRY TASK HANDLER (STAYS TOP LEVEL)
+// =================================================================
 @pragma('vm:entry-point')
 void backgroundNotificationHandler(NotificationEvent event) {
-  log("Background Isolate caught notification: ${event.title}");
+  // Extract package signature strings cleanly
+  final String currentPackage = event.packageName?.toLowerCase() ?? '';
+
+  // Core System Pipeline Blacklist Filtering
+  // Discards keyboard selection prompts ("Choose input method") right at the background boundary!
+  final blacklistedPackages = const [
+    'android',
+    'com.android.systemui',
+    'com.google.android.inputmethod.latin'
+  ];
+
+  if (blacklistedPackages.contains(currentPackage)) {
+    return; // Drop system processes silently without processing
+  }
+
   final SendPort? sendPort = IsolateNameServer.lookupPortByName("_listener_");
-  
   if (sendPort != null) {
     sendPort.send(event);
-  } else {
-    log("Communication channel '_listener_' wasn't found yet.");
   }
 }

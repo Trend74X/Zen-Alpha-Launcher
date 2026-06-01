@@ -53,22 +53,23 @@ class ZenIndex extends StatelessWidget {
                           style: const TextStyle(color: Colors.white, fontSize: 15),
                           cursorColor: Colors.grey,
                           decoration: InputDecoration(
-                            hintText: 'search apps...',
+                            hintText: 'Search Apps...',
                             hintStyle: TextStyle(color: const Color(0xFF404040), fontSize: 14), // Replaces grey[700]
                             border: InputBorder.none,
                             isDense: true,
                             contentPadding: const EdgeInsets.symmetric(vertical: 12),
                             suffixIcon: Obx(() => controller.searchQuery.value.isNotEmpty
-                                ? IconButton(
-                                    icon: const Icon(Icons.clear, color: Colors.grey, size: 16),
-                                    onPressed: () {
-                                      searchTexController.clear();
-                                      controller.searchQuery.value = '';
-                                    },
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(),
-                                  )
-                                : const SizedBox.shrink()),
+                              ? IconButton(
+                                icon: const Icon(Icons.clear, color: Colors.grey, size: 16),
+                                onPressed: () {
+                                  searchTexController.clear();
+                                  controller.searchQuery.value = '';
+                                },
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              )
+                              : const SizedBox.shrink()
+                            ),
                           ),
                         ),
                       ),

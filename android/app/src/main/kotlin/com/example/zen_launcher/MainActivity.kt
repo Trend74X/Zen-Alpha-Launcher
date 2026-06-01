@@ -21,19 +21,59 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 
 class MainActivity: FlutterFragmentActivity() {
-    private val CHANNEL = "com.zen_launcher/battery"
+    private val CHANNEL_BATTERY = "com.zen_launcher/battery"
+    private val CHANNEL_NOTIFICATIONS = "com.zen_launcher/notifications"
     private var screenReceiver: BroadcastReceiver? = null
+    
+    companion object {
+        private var flutterChannel: MethodChannel? = null
+        
+        // Comprehensive blacklist array targeting core low-priority system packages
+        private val BLOCKED_NOTIFICATION_PACKAGES = arrayOf(
+            "android",                              // Catches "Choose input method / Keyboard picker active"
+            "com.android.systemui",                 // Catches persistent system overlays, screenshots, low battery overlays
+            "com.google.android.inputmethod.latin"  // Catches Gboard typing service system notifications
+        )
+
+        /**
+         * Validates package names and channel IDs against your minimalist filtering engine constraints.
+         */
+        fun shouldShowNotification(packageName: String, channelId: String?): Boolean {
+            // Check 1: Drop matching blacklisted package sources
+            if (BLOCKED_NOTIFICATION_PACKAGES.contains(packageName)) {
+                return false
+            }
+            // Check 2: Drop active text field keyboard selector channel tags explicitly
+            if (channelId != null && channelId.contains("input_method", ignoreCase = true)) {
+                return false
+            }
+            return true
+        }
+
+        /**
+         * Safely invokes the active engine channel interface to stream allowed notifications to Dart.
+         */
+        fun sendNotificationToFlutter(packageName: String, title: String, text: String) {
+            val data = HashMap<String, String>()
+            data["packageName"] = packageName
+            data["title"] = title
+            data["text"] = text
+            flutterChannel?.invokeMethod("onNotificationReceived", data)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Force layout engine canvas extension past camera notches
+        // Extend engine layouts past device camera notches seamlessly
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode = 
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
         
-        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        // Open platform communication channel gateways
+        val batteryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_BATTERY)
+        flutterChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_NOTIFICATIONS)
 
         // ---------------------------------------------------------------------
         // SCREEN STATE BROADCAST RECEIVER ENGINE
@@ -48,23 +88,20 @@ class MainActivity: FlutterFragmentActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
-                        channel.invokeMethod("onScreenStateChanged", true)
+                        batteryChannel.invokeMethod("onScreenStateChanged", true)
                     }
                     Intent.ACTION_SCREEN_OFF -> {
-                        channel.invokeMethod("onScreenStateChanged", false)
+                        batteryChannel.invokeMethod("onScreenStateChanged", false)
                     }
                 }
             }
         }
-        
-        // --- FIXED: Swapped 'context.' out for explicit 'this.' binding context ---
         this.registerReceiver(screenReceiver, filter)
 
         // ---------------------------------------------------------------------
         // STANDARD ROUTING METHOD PLATFORM CALLS HANDLER
         // ---------------------------------------------------------------------
-        channel.setMethodCallHandler { call, result ->
-            // --- FIXED: Use explicit activity context reference here to avoid compilation collisions ---
+        batteryChannel.setMethodCallHandler { call, result ->
             val notificationManager = this.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
             when (call.method) {
@@ -81,12 +118,12 @@ class MainActivity: FlutterFragmentActivity() {
                     val enabled = call.argument<Boolean>("enabled") ?: false
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         if (notificationManager.isNotificationPolicyAccessGranted) {
-                            val filter = if (enabled) {
+                            val targetFilter = if (enabled) {
                                 NotificationManager.INTERRUPTION_FILTER_NONE
                             } else {
                                 NotificationManager.INTERRUPTION_FILTER_ALL
                             }
-                            notificationManager.setInterruptionFilter(filter)
+                            notificationManager.setInterruptionFilter(targetFilter)
                             result.success(true)
                         } else {
                             result.error("MISSING_PERMISSION", "Notification policy access not granted", null)
