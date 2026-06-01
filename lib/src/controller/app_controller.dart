@@ -45,6 +45,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
   var searchQuery   = ''.obs;
   var showIcons     = true.obs;          // Defaults to true so toggle has a baseline state
 
+  // Stores the unique Android package names of apps pinned to the home screen
+  var pinnedHomeApps = <String>[].obs;
+
   @override
   Future<void> onInit() async {
     super.onInit();
@@ -467,6 +470,42 @@ class AppController extends GetxController with WidgetsBindingObserver {
     } catch (error) {
       log("Authentication exception intercepted: $error");
       return false; 
+    }
+  }
+
+  /// Checks if a specific app package is pinned to the home screen canvas
+  bool isAppPinnedToHome(String packageName) {
+    return pinnedHomeApps.contains(packageName);
+  }
+
+  /// Pins an app to the home screen from the index page with a hard cap layout guard
+  void pinAppToHome(String packageName) {
+    if (!pinnedHomeApps.contains(packageName)) {
+      // HARD CAP LAYOUT GUARD: Enforce a strict 8-app maximum limit
+      if (pinnedHomeApps.length < 8) { 
+        pinnedHomeApps.add(packageName);
+        pinnedHomeApps.refresh();
+        log("App pinned to home workspace: $packageName");
+      } else {
+        // Fallback fallback warning indicator if the guard fails
+        Get.snackbar(
+          'WORKSPACE SATURATED',
+          'Maximum layout capacity reached (8 apps max).',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.black,
+          colorText: Colors.white,
+          borderRadius: 0,
+        );
+      }
+    }
+  }
+
+  /// Removes a pinned app from the home screen canvas
+  void unpinAppFromHome(String packageName) {
+    if (pinnedHomeApps.contains(packageName)) {
+      pinnedHomeApps.remove(packageName);
+      pinnedHomeApps.refresh();
+      log("App unpinned from home workspace: $packageName");
     }
   }
 

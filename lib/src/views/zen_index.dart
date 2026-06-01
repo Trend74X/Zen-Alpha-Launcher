@@ -136,7 +136,7 @@ class ZenIndex extends StatelessWidget {
                           FocusScope.of(context).unfocus();
                           controller.launchApplicationContainer(app.packageName);
                         },
-                        onLongPress: () => hideAppsDialog(context: context, app: app),
+                        onLongPress: () => hideOrPinAppsDialog(context: context, app: app, controller: controller),
                         splashColor: Colors.transparent,
                         highlightColor: const Color(0xFF0D0D0D),
                         child: Padding(
@@ -207,27 +207,123 @@ class ZenIndex extends StatelessWidget {
     );
   }
 }
-Future<dynamic> hideAppsDialog({required BuildContext context, dynamic app}) {
-  return showDialog(
+Future<dynamic> hideOrPinAppsDialog({
+  required BuildContext context, 
+  required dynamic app, 
+  required dynamic controller,
+}) {
+  return showModalBottomSheet(
     context: context,
-    builder: (context) => AlertDialog(
-      backgroundColor: Colors.black,
-      shape: const LinearBorder(), // Clean, sharp edges matching Zen architecture
-      title: Text('ARCHITECTURAL FOCUS', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1)),
-      content: Text('Do you want to hide ${app.name.toUpperCase()} from index?', style: TextStyle(color: Colors.grey[400], fontSize: 12)),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text('CANCEL', style: TextStyle(color: Colors.grey[600], fontSize: 11, fontWeight: FontWeight.bold)),
-        ),
-        TextButton(
-          onPressed: () {
-            Get.find<AppController>().hideApplication(app.packageName);
-            Navigator.pop(context);
-          },
-          child: const Text('HIDE APP', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-        ),
-      ],
-    ),
+    backgroundColor: Colors.black,
+    shape: const LinearBorder(),
+    builder: (context) {
+      return Container(
+        padding: const EdgeInsets.all(24.0),
+        child: Obx(() {
+          final bool isPinned = controller.isAppPinnedToHome(app.packageName);
+          final bool isHidden = controller.hiddenAppPackages.contains(app.packageName);
+          // Check if the home screen has already saturated its 6 custom slots
+          final bool isHomeCanvasFull = controller.pinnedHomeApps.length >= 5;
+          
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // --- HEADER META INFORMATION ---
+              Text(
+                app.name.toUpperCase(), 
+                style: const TextStyle(
+                  color: Colors.white, 
+                  fontSize: 14, 
+                  fontWeight: FontWeight.bold, 
+                  letterSpacing: 1,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                app.packageName, 
+                style: TextStyle(color: Colors.grey[600], fontSize: 11),
+              ),
+              
+              const Divider(color: Color(0xFF1A1A1A), height: 32),
+              
+              // --- ACTION ITEM 1: PIN / UNPIN CHANNELS (WITH CAPACITY GUARD) ---
+              if (isPinned) ...[
+                // If the app is already pinned, always allow removing it
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text(
+                    'REMOVE FROM HOME SCREEN',
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                  onTap: () {
+                    controller.unpinAppFromHome(app.packageName);
+                    Navigator.pop(context); 
+                  },
+                ),
+              ] else if (isHomeCanvasFull) ...[
+                // If NOT pinned and canvas is full, show a clean, non-clickable notice
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(
+                    'HOME CANVAS CAP FULL (6 MAX)',
+                    style: TextStyle(
+                      color: Colors.grey[800], // Heavily muted to signpost disabled state
+                      fontSize: 13, 
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ] else ...[
+                // Normal state: App is not pinned, and there is still open room
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text(
+                    'PIN TO HOME SCREEN',
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                  onTap: () {
+                    controller.pinAppToHome(app.packageName);
+                    Navigator.pop(context); 
+                  },
+                ),
+              ],
+              
+              const SizedBox(height: 8),
+
+              // --- ACTION ITEM 2: HIDE / REVEAL CHANNELS ---
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(
+                  isHidden ? 'REVEAL ENVIRONMENTAL AVAILABILITY' : 'HIDE APPLICATION',
+                  style: TextStyle(
+                    color: isHidden ? Colors.white : Colors.grey[400], 
+                    fontSize: 13, 
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                onTap: () {
+                  if (isHidden) {
+                    controller.revealApplication(app.packageName);
+                  } else {
+                    controller.hideApplication(app.packageName);
+                    if (isPinned) {
+                      controller.unpinAppFromHome(app.packageName);
+                    }
+                  }
+                  Navigator.pop(context); 
+                },
+              ),
+            ],
+          );
+        }),
+      );
+    },
   );
 }
