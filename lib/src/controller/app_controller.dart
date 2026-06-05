@@ -17,40 +17,46 @@ class AppController extends GetxController with WidgetsBindingObserver {
   final dndPlugin = DoNotDisturbPlugin();
   final localAuth = LocalAuthentication();
   
-  // --- PLATFORM COMMUNICATION GATEWAYS ---
-  static const platform = MethodChannel('com.zen_launcher/battery');
+    // --- PLATFORM COMMUNICATION GATEWAYS ---
+  static const platform                          = MethodChannel('com.zen_launcher/battery');
   static const MethodChannel notificationChannel = MethodChannel('com.zen_launcher/notifications');
 
-  // --- GETX REACTIVE STATE VARIABLES ---
+    // --- GETX REACTIVE STATE VARIABLES ---
   var isListenerRunning = false.obs;
   var isDndActive       = false.obs;
   var appTimersActive   = false.obs;
   var isScreenOn        = true.obs;
   
-  // Master thread-safe collection of notifications displayed in Zen view layers
+    // Master thread-safe collection of notifications displayed in Zen view layers
   var collectedNotifications = <NotificationEvent>[].obs;
   var appLabelCache          = <String, String>{}.obs;
 
-  // --- USER WORKSPACE CLOCK METRICS ---
+    // --- USER WORKSPACE CLOCK METRICS ---
   var todayScreenTime = "00:00".obs;
   Timer? _tickerTimer;
-  int  _accumulatedSecondsToday = 0;     
-  bool _isDeviceScreenOn        = true;  
+  int  _accumulatedSecondsToday = 0;
+  bool _isDeviceScreenOn        = true;
 
-  // Native hardware platform port pipeline communication memory trace
+    // Native hardware platform port pipeline communication memory trace
   ReceivePort? _uiReceivePort;
 
-  // --- APPLICATION REPOS & VAULTS ---
-  var installedApps = <AppModel>[].obs;
+    // --- APPLICATION REPOS & VAULTS ---
+  var installedApps     = <AppModel>[].obs;
   var hiddenAppPackages = <String>{}.obs;
-  var isLoadingApps = false.obs;
-  var searchQuery   = ''.obs;
-  var showIcons     = true.obs;          
+  var isLoadingApps     = false.obs;
+  var searchQuery       = ''.obs;
+  var showIcons         = true.obs;
 
-  // --- DYNAMIC WORKSPACE SLOTS (MAX 6 CUSTOM ADDS) ---
+    // --- DYNAMIC WORKSPACE SLOTS (MAX 6 CUSTOM ADDS) ---
   var pinnedHomeApps = <String>[].obs;
 
-  var isDoubleTapLockEnabled = false.obs; // Defaults to off
+  var isDoubleTapLockEnabled = false.obs;  // Defaults to off
+
+    // --- THE INTERRUPTER PROPERTIES ---
+  var isInterrupterActive         = false.obs;
+  var interrupterRemainingSeconds = 5.obs;
+  var currentInterruptedPackage   = '';
+  Timer? interrupterTimer;
 
   @override
   Future<void> onInit() async {
@@ -382,12 +388,10 @@ class AppController extends GetxController with WidgetsBindingObserver {
     ).toList();
   }
 
+  /// The absolute master click handler—no conditions, always blocks first!
   Future<void> launchApplicationContainer(String packageName) async {
-    try {
-      await platform.invokeMethod('launchApp', packageName);
-    } catch (e) {
-      log("Could not open app $packageName: $e");
-    }
+    log("Intercepting launch intent for $packageName. Showing Interrupter immediately.");
+    triggerInterrupterGate(packageName);
   }
 
   // =================================================================
@@ -596,6 +600,72 @@ class AppController extends GetxController with WidgetsBindingObserver {
     } else {
       isDoubleTapLockEnabled.value = false;
     }
+  }
+
+  /// Handles the countdown ticking
+  void triggerInterrupterGate(String packageName) {
+    currentInterruptedPackage = packageName;
+    interrupterRemainingSeconds.value = 5; // Reset countdown token to 5
+    isInterrupterActive.value = true;
+
+    interrupterTimer?.cancel();
+    interrupterTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (interrupterRemainingSeconds.value > 1) {
+        interrupterRemainingSeconds.value--;
+      } else {
+        // --- CHOSEN BEHAVIOR ---
+        // If the user doesn't touch anything, the timer expires and kicks them back automatically!
+        log("User left idle. Resetting environment baseline.");
+        cancelInterrupter();
+      }
+    });
+  }
+
+  void cancelInterrupter() {
+    interrupterTimer?.cancel();
+    isInterrupterActive.value = false;
+    currentInterruptedPackage = '';
+  }
+
+  void completeOverride() {
+    interrupterTimer?.cancel();
+    isInterrupterActive.value = false;
+    
+    // Launch the target app now that intention is proven
+    if (currentInterruptedPackage.isNotEmpty) {
+      _directNativeLaunch(currentInterruptedPackage);
+    }
+  }
+
+  /// Direct pass-through that invokes the native Android intent to open the app
+  Future<void> _directNativeLaunch(String packageName) async {
+    try {
+      // Fires the launch command down the method channel pipe to MainActivity.kt
+      await platform.invokeMethod('launchApp', packageName);
+    } catch (e) {
+      log("Could not open app $packageName via native execution channel: $e");
+      Get.snackbar(
+        'LAUNCH FAILED',
+        'Application could not be resolved by the system pipeline.',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: Colors.black,
+        colorText: Colors.white,
+        borderRadius: 0,
+      );
+    }
+  }
+
+  /// Restarts the countdown ticking without resetting the remaining seconds token
+  void resumeInterrupterCountdown() {
+    interrupterTimer?.cancel();
+    interrupterTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (interrupterRemainingSeconds.value > 1) {
+        interrupterRemainingSeconds.value--;
+      } else {
+        log("User left idle after release. Resetting environment baseline.");
+        cancelInterrupter();
+      }
+    });
   }
 
 }
