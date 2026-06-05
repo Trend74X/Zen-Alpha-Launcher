@@ -60,6 +60,14 @@ class ZenToolsPage extends StatelessWidget {
                       controller.appTimersActive.value, 
                       (newValue) => controller.toggleAppTimers(newValue),
                     ),
+
+                    // --- INTEGRATED DOUBLE-TAP TO LOCK TOGGLE ---
+                    _buildToggleSetting(
+                      'Double-Tap to Lock', 
+                      'Sleep the device screen automatically from empty wallpaper spaces.', 
+                      controller.isDoubleTapLockEnabled.value, 
+                      (newValue) => controller.toggleDoubleTapLock(newValue),
+                    ),
                     
                     buildNavigationSetting(
                       title: 'Hidden Applications',

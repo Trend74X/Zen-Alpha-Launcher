@@ -50,6 +50,8 @@ class AppController extends GetxController with WidgetsBindingObserver {
   // --- DYNAMIC WORKSPACE SLOTS (MAX 6 CUSTOM ADDS) ---
   var pinnedHomeApps = <String>[].obs;
 
+  var isDoubleTapLockEnabled = false.obs; // Defaults to off
+
   @override
   Future<void> onInit() async {
     super.onInit();
@@ -61,6 +63,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
     
     // Fire Up Local Screen Activity Trackers
     initLocalScreenTimeTracking();
+    syncDoubleTapToggleWithSystem();
   } 
 
   @override
@@ -77,6 +80,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       log("User returned to launcher. Re-checking remaining workflows...");
       startZenModeWorkflow();
+      syncDoubleTapToggleWithSystem();
     }
   }
 
@@ -149,6 +153,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
       }
     } on PlatformException catch (e) {
       if (e.code == 'MISSING_PERMISSION') {
+        // ignore: use_build_context_synchronously
         _showDndPermissionDialog(context);
       }
     }
@@ -494,6 +499,105 @@ class AppController extends GetxController with WidgetsBindingObserver {
       return false; 
     }
   }
+
+  Future<void> lockDeviceScreen() async {
+    try {
+      final bool success = await platform.invokeMethod('lockScreen');
+      if (success) {
+        log("Hardware lock sequence fired successfully.");
+      }
+    } on PlatformException catch (e) {
+      log("Failed to execute platform hardware screen lock: ${e.message}");
+      
+      // Catch the specific error string passed over from Kotlin
+      if (e.code == "DISABLED" || e.code == "REJECTED") {
+        Get.snackbar(
+          'ACCESSIBILITY REQUIRED',
+          'Tap here to authorize Zen Launcher to sleep the screen automatically.',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.black,
+          colorText: Colors.white,
+          borderRadius: 0,
+          duration: const Duration(seconds: 4),
+          // If they tap the notification snackbar, open settings automatically!
+          onTap: (_) {
+            openAccessibilitySystemSettings();
+          },
+        );
+      }
+    }
+  }
+
+  Future<void> openAccessibilitySystemSettings() async {
+    try {
+      await platform.invokeMethod('openAccessibilitySettings');
+      log("Redirected user directly to system accessibility control panel.");
+    } on PlatformException catch (e) {
+      log("Failed to launch accessibility routing sequence: ${e.message}");
+    }
+  }
+
+  /// Manages the activation state based on real system confirmation
+  Future<void> toggleDoubleTapLock(bool targetState) async {
+    if (targetState) {
+      // 1. Immediately route them to the settings panel
+      await openAccessibilitySystemSettings();
+
+      // 2. WAIT! This delay gives the OS a brief moment to open the settings app window
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // 3. We pause execution here until the user comes back to Zen Launcher.
+      // (When they hit back from settings, this async line resumes automatically)
+      
+      // 4. Run the native permission test right now
+      bool truePermissionStatus = await checkAccessibilityPermission();
+
+      if (truePermissionStatus) {
+        isDoubleTapLockEnabled.value = true;
+        log("Double-tap permission verified. Activated cleanly.");
+      } else {
+        // The user backed out without flipping the toggle! Force switch off.
+        isDoubleTapLockEnabled.value = false;
+        log("Permission denied by user. Reverting toggle state to off.");
+        
+        Get.snackbar(
+          'PERMISSION DENIED',
+          'Double-tap to lock requires enabling the service in settings.',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.black,
+          colorText: Colors.white,
+          borderRadius: 0,
+        );
+      }
+    } else {
+      // Turning it off requires no verification, just drop the local preference
+      isDoubleTapLockEnabled.value = false;
+    }
+  }
+
+  /// Native helper that returns true/false from Android OS
+  Future<bool> checkAccessibilityPermission() async {
+    try {
+      final bool isEnabled = await platform.invokeMethod('checkAccessibilityPermission');
+      return isEnabled;
+    } catch (e) {
+      log("Error checking accessibility permission: $e");
+      return false;
+    }
+  }
+
+  /// Checks the actual native OS state and forces the UI switch to match it perfectly
+  Future<void> syncDoubleTapToggleWithSystem() async {
+    bool hasPermission = await checkAccessibilityPermission();
+    
+    // If permission is active, make sure our local toggle reflects it
+    if (hasPermission) {
+      isDoubleTapLockEnabled.value = true;
+    } else {
+      isDoubleTapLockEnabled.value = false;
+    }
+  }
+
 }
 
 class AppModel {

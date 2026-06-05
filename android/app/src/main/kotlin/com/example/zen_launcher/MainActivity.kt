@@ -2,6 +2,7 @@ package com.example.zen_launcher
 
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName  // <-- ADDED MISSING IMPORT
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -14,6 +15,7 @@ import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.TextUtils          // <-- ADDED MISSING IMPORT
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -28,31 +30,22 @@ class MainActivity: FlutterFragmentActivity() {
     companion object {
         private var flutterChannel: MethodChannel? = null
         
-        // Comprehensive blacklist array targeting core low-priority system packages
         private val BLOCKED_NOTIFICATION_PACKAGES = arrayOf(
-            "android",                              // Catches "Choose input method / Keyboard picker active"
-            "com.android.systemui",                 // Catches persistent system overlays, screenshots, low battery overlays
-            "com.google.android.inputmethod.latin"  // Catches Gboard typing service system notifications
+            "android",
+            "com.android.systemui",
+            "com.google.android.inputmethod.latin"
         )
 
-        /**
-         * Validates package names and channel IDs against your minimalist filtering engine constraints.
-         */
         fun shouldShowNotification(packageName: String, channelId: String?): Boolean {
-            // Check 1: Drop matching blacklisted package sources
             if (BLOCKED_NOTIFICATION_PACKAGES.contains(packageName)) {
                 return false
             }
-            // Check 2: Drop active text field keyboard selector channel tags explicitly
             if (channelId != null && channelId.contains("input_method", ignoreCase = true)) {
                 return false
             }
             return true
         }
 
-        /**
-         * Safely invokes the active engine channel interface to stream allowed notifications to Dart.
-         */
         fun sendNotificationToFlutter(packageName: String, title: String, text: String) {
             val data = HashMap<String, String>()
             data["packageName"] = packageName
@@ -65,19 +58,15 @@ class MainActivity: FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Extend engine layouts past device camera notches seamlessly
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode = 
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
         
-        // Open platform communication channel gateways
         val batteryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_BATTERY)
         flutterChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_NOTIFICATIONS)
 
-        // ---------------------------------------------------------------------
-        // SCREEN STATE BROADCAST RECEIVER ENGINE
-        // ---------------------------------------------------------------------
+        // Screen State Broadcast Receiver
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -98,9 +87,7 @@ class MainActivity: FlutterFragmentActivity() {
         }
         this.registerReceiver(screenReceiver, filter)
 
-        // ---------------------------------------------------------------------
-        // STANDARD ROUTING METHOD PLATFORM CALLS HANDLER
-        // ---------------------------------------------------------------------
+        // Method Channel Handlers
         batteryChannel.setMethodCallHandler { call, result ->
             val notificationManager = this.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -230,6 +217,44 @@ class MainActivity: FlutterFragmentActivity() {
                         result.error("BAD_ARGUMENTS", "Package name was null", null)
                     }
                 }
+
+                // --- OPTIMIZED SCREEN LOCK EXECUTION VECTOR ---
+                "lockScreen" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        // Request direct command dispatch via tracking instance
+                        val resultStatus = ZenAccessibilityService.requestScreenLock()
+                        
+                        when (resultStatus) {
+                            "SUCCESS" -> result.success(true)
+                            "SERVICE_NOT_CONNECTED_OR_DISABLED" -> {
+                                result.error("DISABLED", "Accessibility service is off in system settings.", null)
+                            }
+                            "OS_REJECTED_ACTION_CHECK_PERMISSIONS" -> {
+                                result.error("REJECTED", "Android window pipeline refused execution.", null)
+                            }
+                            else -> result.error("ERROR", resultStatus, null)
+                        }
+                    } else {
+                        result.error("UNSUPPORTED_OS", "Requires Android 9 or above.", null)
+                    }
+                }
+
+                "checkAccessibilityPermission" -> {
+                    val isEnabled = isAccessibilityServiceEnabled()
+                    result.success(isEnabled)
+                }
+
+                "openAccessibilitySettings" -> {
+                    try {
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        this.startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("INTENT_FAILED", "Could not open accessibility panel: ${e.message}", null)
+                    }
+                }
                 
                 else -> {
                     result.notImplemented()
@@ -263,5 +288,24 @@ class MainActivity: FlutterFragmentActivity() {
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
         return stream.toByteArray()
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expectedComponentName = ComponentName(this, ZenAccessibilityService::class.java)
+        val settingValue = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+
+        val splitter = TextUtils.SimpleStringSplitter(':')
+        splitter.setString(settingValue)
+        while (splitter.hasNext()) {
+            val accessService = splitter.next()
+            val componentName = ComponentName.unflattenFromString(accessService)
+            if (componentName != null && componentName == expectedComponentName) {
+                return true
+            }
+        }
+        return false
     }
 }
