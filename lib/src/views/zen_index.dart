@@ -183,13 +183,37 @@ class ZenIndex extends StatelessWidget {
                               }),
                               
                               // --- CLEAN TYPOGRAPHY APP TITLE ---
-                              Text(
-                                app.name,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                  letterSpacing: 0.3,
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      app.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
+                                        letterSpacing: 0.3,
+                                      ),
+                                    ),
+                                    if (controller.appDailyLimits[app.packageName] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 2),
+                                        child: Text(
+                                          '${controller.getUsedMinutes(app.packageName)} / ${controller.appDailyLimits[app.packageName]} MIN TODAY',
+                                          style: TextStyle(
+                                            color: controller.isAppOverLimit(app.packageName)
+                                                ? Colors.redAccent
+                                                : Colors.grey[600],
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.bold,
+                                            letterSpacing: 0.8,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
                             ],
@@ -321,10 +345,147 @@ Future<dynamic> hideOrPinAppsDialog({
                   Navigator.pop(context); 
                 },
               ),
+
+              const SizedBox(height: 8),
+
+              // --- ACTION ITEM 3: PER-APP DAILY LIMIT ---
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(
+                  controller.appDailyLimits.containsKey(app.packageName)
+                      ? 'DAILY LIMIT: ${controller.appDailyLimits[app.packageName]} MIN'
+                      : 'SET DAILY LIMIT',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  showAppLimitPicker(
+                    appName: app.name,
+                    packageName: app.packageName,
+                    controller: controller,
+                  );
+                },
+              ),
             ],
           );
         }),
       );
     },
+  );
+}
+
+/// Lets the user choose (or clear) a daily limit for a single app.
+///
+/// A null result means "cancelled" and leaves the current limit untouched.
+Future<void> showAppLimitPicker({
+  required String appName,
+  required String packageName,
+  required AppController controller,
+}) async {
+  final int currentLimit = controller.appDailyLimits[packageName] ?? 0;
+
+  const List<int> options = [0, 15, 30, 60, 120];
+
+  final int? selected = await Get.dialog<int>(
+    AlertDialog(
+      backgroundColor: const Color(0xFF0F0F0F),
+      shape: const LinearBorder(),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'DAILY LIMIT',
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            appName.toUpperCase(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.5,
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final int minutes in options)
+            _limitOption(
+              minutes: minutes,
+              isSelected: minutes == currentLimit,
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Get.back<int>(),
+          child: Text(
+            'CANCEL',
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  if (selected == null) return;
+  controller.setAppLimit(packageName, selected);
+}
+
+Widget _limitOption({required int minutes, required bool isSelected}) {
+  final String label = minutes == 0 ? 'NO LIMIT' : '$minutes MIN';
+
+  return InkWell(
+    onTap: () => Get.back<int>(result: minutes),
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: isSelected ? Colors.white : const Color(0xFF2A2A2A),
+        ),
+        borderRadius: BorderRadius.circular(2),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: isSelected ? Colors.white : Colors.grey[400],
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
+          if (isSelected)
+            const Icon(Icons.check, color: Colors.white, size: 16),
+        ],
+      ),
+    ),
   );
 }

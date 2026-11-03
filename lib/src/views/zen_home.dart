@@ -25,6 +25,63 @@ class ZenHome extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 40.0),
+
+              // --- HOME ROLE BANNER ---
+              // Android cannot silently become the default launcher; the user
+              // must choose Zen once. Keep this visible until they do.
+              Obx(() {
+                if (controller.isDefaultLauncher.value) {
+                  return const SizedBox.shrink();
+                }
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 20.0),
+                  child: GestureDetector(
+                    onTap: () => controller.requestDefaultLauncher(),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF111111),
+                        border: Border.all(color: Colors.white24),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.home_outlined, color: Colors.white, size: 16),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'MAKE ZEN YOUR HOME',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  'Tap to stop Android returning to the stock launcher.',
+                                  style: TextStyle(
+                                    color: Colors.grey[500],
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.arrow_forward, color: Colors.white, size: 14),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
+
               const Center(child: ZenClock()), 
               const SizedBox(height: 50.0),
               

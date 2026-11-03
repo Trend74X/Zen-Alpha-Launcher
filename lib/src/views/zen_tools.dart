@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:zen_launcher/src/config/app_config.dart';
 import 'package:zen_launcher/src/controller/app_controller.dart';
 import 'package:zen_launcher/src/widget/hidden_apps.dart';
 
@@ -56,7 +57,9 @@ class ZenToolsPage extends StatelessWidget {
                     
                     _buildToggleSetting(
                       'App Timers', 
-                      'Hard-lock distracting applications.', 
+                      controller.usageAccessGranted.value
+                          ? 'Daily limits for distracting applications.'
+                          : 'Requires Usage Access to track app time.', 
                       controller.appTimersActive.value, 
                       (newValue) => controller.toggleAppTimers(newValue),
                     ),
@@ -69,6 +72,16 @@ class ZenToolsPage extends StatelessWidget {
                       (newValue) => controller.toggleDoubleTapLock(newValue),
                     ),
                     
+                    buildNavigationSetting(
+                      title: controller.isDefaultLauncher.value
+                          ? 'Default Home App'
+                          : 'Set as Default Launcher',
+                      subtitle: controller.isDefaultLauncher.value
+                          ? 'Zen is your HOME app. Home always returns here.'
+                          : 'Required so Home keeps Zen in place instead of minimizing it.',
+                      onTap: () => controller.requestDefaultLauncher(),
+                    ),
+
                     buildNavigationSetting(
                       title: 'Hidden Applications',
                       subtitle: 'Apps filtered out of your daily awareness loops.',
@@ -84,6 +97,29 @@ class ZenToolsPage extends StatelessWidget {
                         }
                       },
                     ),
+
+                    buildNavigationSetting(
+                      title: 'Notification Access',
+                      subtitle: controller.isListenerRunning.value
+                          ? 'Connected. Notifications appear in the Vault.'
+                          : 'Required to collect notifications in the Vault.',
+                      onTap: () => controller.requestNotificationAccess(),
+                    ),
+
+                    buildNavigationSetting(
+                      title: 'Background Reliability',
+                      subtitle: 'Keep Zen active while the screen is off.',
+                      onTap: () => controller.openBatterySettings(),
+                    ),
+
+                    // Hidden until a real URL is configured so the app never
+                    // ships a broken privacy link.
+                    if (privacyPolicyUrl.isNotEmpty)
+                      buildNavigationSetting(
+                        title: 'Privacy Policy',
+                        subtitle: 'How Zen handles notification and usage data on this device.',
+                        onTap: () => controller.openPrivacyPolicy(),
+                      ),
                   ],
                 )),
             

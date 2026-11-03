@@ -9,13 +9,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_notification_listener_plus/flutter_notification_listener_plus.dart';
 import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
 import 'package:local_auth/local_auth.dart';
 // ignore: depend_on_referenced_packages
 import 'package:local_auth_android/local_auth_android.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:zen_launcher/src/config/app_config.dart';
+import 'package:zen_launcher/src/widget/permission_disclosure.dart';
 
 class AppController extends GetxController with WidgetsBindingObserver {
   final dndPlugin = DoNotDisturbPlugin();
   final localAuth = LocalAuthentication();
+  final _storage = GetStorage();
   
     // --- PLATFORM COMMUNICATION GATEWAYS ---
   static const platform                          = MethodChannel('com.zen_launcher/battery');
@@ -26,6 +31,11 @@ class AppController extends GetxController with WidgetsBindingObserver {
   var isDndActive       = false.obs;
   var appTimersActive   = false.obs;
   var isScreenOn        = true.obs;
+
+    // --- APP TIMER / USAGE TRACKING ---
+  var usageAccessGranted = false.obs;
+  var todayAppUsage      = <String, int>{}.obs; // packageName -> foreground millis today
+  var appDailyLimits     = <String, int>{}.obs; // packageName -> daily limit in minutes
   
     // Master thread-safe collection of notifications displayed in Zen view layers
   var collectedNotifications = <NotificationEvent>[].obs;
@@ -52,6 +62,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
 
   var isDoubleTapLockEnabled = false.obs;  // Defaults to off
 
+    // --- DEFAULT HOME / LAUNCHER ROLE ---
+  var isDefaultLauncher = false.obs;
+
     // --- THE INTERRUPTER PROPERTIES ---
   var isInterrupterActive         = false.obs;
   var interrupterRemainingSeconds = 5.obs;
@@ -64,12 +77,19 @@ class AppController extends GetxController with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     
     // Core Launcher Lifecycle Initialization Hooks
+    await checkDefaultLauncher();
     await startZenModeWorkflow();
     await fetchInstalledApps();
+    await initAppTimers();
     
     // Fire Up Local Screen Activity Trackers
     initLocalScreenTimeTracking();
     syncDoubleTapToggleWithSystem();
+
+    // Ask once to become the HOME app (only after notification setup settles).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      maybePromptDefaultLauncher();
+    });
   } 
 
   @override
@@ -86,7 +106,10 @@ class AppController extends GetxController with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       log("User returned to launcher. Re-checking remaining workflows...");
       startZenModeWorkflow();
+      checkDefaultLauncher();
+      maybePromptDefaultLauncher();
       syncDoubleTapToggleWithSystem();
+      syncAppTimersWithSystem();
     }
   }
 
@@ -113,9 +136,16 @@ class AppController extends GetxController with WidgetsBindingObserver {
   Future<void> startZenModeWorkflow() async {
     bool hasListenerPermission = (await NotificationsListener.hasPermission) ?? false;
     if (!hasListenerPermission) {
-      log('Notification Listener Permission missing. Prompting user...');
-      await NotificationsListener.openPermissionSettings();
-      return; 
+      // Only auto-prompt once, and only after showing Play-required disclosure.
+      // After that the user can reconnect from ZEN CONTROL > Notification Access.
+      final bool alreadyAsked = _storage.read<bool>('notification_disclosure_seen') ?? false;
+      if (!alreadyAsked) {
+        _storage.write('notification_disclosure_seen', true);
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          await requestNotificationAccess();
+        });
+      }
+      return;
     }
 
     // Sync current native hardware DND status flags on app startup
@@ -124,18 +154,123 @@ class AppController extends GetxController with WidgetsBindingObserver {
     await initializeNotificationCollector();
   }
 
+  /// Shows the Play-required disclosure and then opens Notification Access settings.
+  Future<void> requestNotificationAccess() async {
+    final bool accepted = await showPermissionDisclosure(
+      eyebrow: 'NOTIFICATION ACCESS',
+      title: 'YOUR NOTIFICATION VAULT',
+      body:
+          'Zen Launcher reads notification titles and text so it can show them in your Notification Vault while Zen mode is active. '
+          'This content stays on this device, is never uploaded or shared, and is cleared when you clear the Vault or close the app. '
+          'You can turn this access off at any time in Android Settings.',
+      continueLabel: 'CONTINUE',
+    );
+
+    if (!accepted) return;
+
+    _storage.write('notification_disclosure_accepted', true);
+    await NotificationsListener.openPermissionSettings();
+  }
+
+  Future<void> openBatterySettings() async {
+    try {
+      await BatteryOptimizationHelper.openBatteryOptimizationSettings();
+    } catch (e) {
+      log("Could not open battery optimization settings: $e");
+    }
+  }
+
+  /// Opens the public privacy policy in the browser.
+  ///
+  /// The entry point is hidden while [privacyPolicyUrl] is empty, so this is a
+  /// no-op until a URL is configured.
+  Future<void> openPrivacyPolicy() async {
+    if (privacyPolicyUrl.isEmpty) return;
+
+    try {
+      final bool opened = await launchUrl(
+        Uri.parse(privacyPolicyUrl),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!opened) {
+        log("Could not open the privacy policy URL.");
+      }
+    } catch (e) {
+      log("Could not open the privacy policy URL: $e");
+    }
+  }
+
+  /// Reads whether Zen is currently the system HOME app.
+  Future<void> checkDefaultLauncher() async {
+    try {
+      final bool isDefault = await platform.invokeMethod('isDefaultLauncher') ?? false;
+      isDefaultLauncher.value = isDefault;
+    } catch (e) {
+      log("Error checking default launcher state: $e");
+      isDefaultLauncher.value = false;
+    }
+  }
+
+  /// Opens the system prompt/settings to make Zen the default home app.
+  Future<void> requestDefaultLauncher() async {
+    try {
+      await platform.invokeMethod('requestDefaultLauncher');
+    } on PlatformException catch (e) {
+      log("Failed to open default launcher settings: ${e.message}");
+    }
+  }
+
+  /// Nudges the user once to make Zen the system HOME app.
+  ///
+  /// Runs only after the notification-access flow has been handled so two system
+  /// prompts never overlap on a fresh install.
+  Future<void> maybePromptDefaultLauncher() async {
+    await checkDefaultLauncher();
+    if (isDefaultLauncher.value) return;
+
+    final bool alreadyPrompted = _storage.read<bool>('default_launcher_prompted') ?? false;
+    if (alreadyPrompted || Get.isDialogOpen == true) return;
+
+    final bool notificationDisclosureSeen =
+        _storage.read<bool>('notification_disclosure_seen') ?? false;
+    final bool listenerGranted = (await NotificationsListener.hasPermission) ?? false;
+    if (!notificationDisclosureSeen && !listenerGranted) return;
+
+    _storage.write('default_launcher_prompted', true);
+
+    final bool accepted = await showPermissionDisclosure(
+      eyebrow: 'HOME APP',
+      title: 'MAKE ZEN YOUR HOME',
+      body:
+          'Zen is a launcher, so it needs to be your default home app. That keeps it in place when you press Home '
+          'instead of letting Android minimize it back to your old launcher. '
+          'You can change this any time in Android Settings.',
+      continueLabel: 'SET AS HOME',
+      declineLabel: 'NOT NOW',
+    );
+
+    if (accepted) {
+      await requestDefaultLauncher();
+    }
+  }
+
   Future<void> checkAndRequestBatteryExemption() async {
     try {
       final bool isIgnoring = await platform.invokeMethod('isIgnoringBattery');
       if (!isIgnoring) {
-        log("Launcher is being optimized by battery saver. Prompting user...");
-        await BatteryOptimizationHelper.openBatteryOptimizationSettings();
+        // Do not open system settings on every launcher start. Prompt once;
+        // the user can reopen this from ZEN CONTROL > Background Reliability.
+        final bool alreadyPrompted = _storage.read<bool>('battery_opt_prompted') ?? false;
+        if (!alreadyPrompted) {
+          _storage.write('battery_opt_prompted', true);
+          log("Launcher is being optimized by battery saver. Prompting user once...");
+          await BatteryOptimizationHelper.openBatteryOptimizationSettings();
+        }
       } else {
         log("Launcher is already white-listed from battery saving.");
       }
     } on PlatformException catch (e) {
       log("Failed to check battery status: ${e.message}");
-      await BatteryOptimizationHelper.openBatteryOptimizationSettings();
     }
   }
 
@@ -160,13 +295,174 @@ class AppController extends GetxController with WidgetsBindingObserver {
     } on PlatformException catch (e) {
       if (e.code == 'MISSING_PERMISSION') {
         // ignore: use_build_context_synchronously
-        _showDndPermissionDialog(context);
+        await requestDndAccess(context);
       }
     }
   }
 
-  void toggleAppTimers(bool targetState) {
-    appTimersActive.value = targetState;
+  Future<void> toggleAppTimers(bool targetState) async {
+    if (!targetState) {
+      appTimersActive.value = false;
+      _storage.write('app_timers_active', false);
+      return;
+    }
+
+    final bool granted = await checkUsageAccess();
+    if (!granted) {
+      final bool accepted = await showPermissionDisclosure(
+        eyebrow: 'USAGE ACCESS',
+        title: 'APP TIMERS',
+        body:
+            'Zen Launcher reads how long apps have been in the foreground today so it can enforce the daily limits you set. '
+            'Usage data stays on this device and is never uploaded or shared. '
+            'You can revoke Usage Access at any time in Android Settings.',
+        continueLabel: 'CONTINUE',
+      );
+
+      if (!accepted) {
+        appTimersActive.value = false;
+        return;
+      }
+
+      // Remember the intent so the toggle turns on automatically when the
+      // user returns from the Usage Access screen.
+      _storage.write('app_timers_active', true);
+      await openUsageAccessSettings();
+      return;
+    }
+
+    await refreshUsageStats();
+    appTimersActive.value = true;
+    _storage.write('app_timers_active', true);
+  }
+
+  Future<bool> checkUsageAccess() async {
+    try {
+      final bool granted = await platform.invokeMethod('hasUsageAccess') ?? false;
+      usageAccessGranted.value = granted;
+      return granted;
+    } catch (e) {
+      log("Error checking Usage Access: $e");
+      usageAccessGranted.value = false;
+      return false;
+    }
+  }
+
+  Future<void> openUsageAccessSettings() async {
+    try {
+      await platform.invokeMethod('openUsageAccessSettings');
+    } catch (e) {
+      log("Could not open Usage Access settings: $e");
+    }
+  }
+
+  Future<void> initAppTimers() async {
+    final dynamic stored = _storage.read('app_daily_limits');
+    if (stored is Map) {
+      appDailyLimits.clear();
+      stored.forEach((key, value) {
+        if (value is num) {
+          appDailyLimits[key.toString()] = value.toInt();
+        }
+      });
+    }
+    await syncAppTimersWithSystem();
+  }
+
+  /// Reconciles the App Timers toggle with the real Usage Access state.
+  Future<void> syncAppTimersWithSystem() async {
+    final bool granted = await checkUsageAccess();
+
+    if (!granted) {
+      appTimersActive.value = false;
+      _storage.write('app_timers_active', false);
+      todayAppUsage.clear();
+      return;
+    }
+
+    final bool requested = _storage.read<bool>('app_timers_active') ?? false;
+    appTimersActive.value = requested;
+    if (requested) {
+      await refreshUsageStats();
+    }
+  }
+
+  Future<void> refreshUsageStats() async {
+    if (!await checkUsageAccess()) {
+      todayAppUsage.clear();
+      return;
+    }
+
+    try {
+      final Map<dynamic, dynamic>? raw = await platform.invokeMethod('getTodayUsage');
+      if (raw == null) return;
+
+      todayAppUsage.assignAll(
+        raw.map((key, value) => MapEntry(key.toString(), (value as num).toInt())),
+      );
+    } catch (e) {
+      log("Could not refresh app usage stats: $e");
+    }
+  }
+
+  void setAppLimit(String packageName, int minutes) {
+    if (minutes <= 0) {
+      appDailyLimits.remove(packageName);
+    } else {
+      appDailyLimits[packageName] = minutes;
+    }
+    appDailyLimits.refresh();
+    _storage.write('app_daily_limits', Map<String, int>.from(appDailyLimits));
+  }
+
+  int getUsedMinutes(String packageName) {
+    return ((todayAppUsage[packageName] ?? 0) / 60000).floor();
+  }
+
+  bool isAppOverLimit(String packageName) {
+    if (!appTimersActive.value) return false;
+    final int? limit = appDailyLimits[packageName];
+    if (limit == null || limit <= 0) return false;
+    return (todayAppUsage[packageName] ?? 0) >= limit * 60 * 1000;
+  }
+
+  void _showLimitReached(String packageName) {
+    final int limit = appDailyLimits[packageName] ?? 0;
+    final String appName = getAppNameOf(packageName);
+
+    Get.dialog(
+      AlertDialog(
+        backgroundColor: const Color(0xFF0F0F0F),
+        shape: const LinearBorder(),
+        title: Text(
+          '$appName LIMIT REACHED',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.5,
+          ),
+        ),
+        content: Text(
+          'You have used your $limit minute daily limit for $appName. '
+          'Take a break and come back tomorrow.',
+          style: TextStyle(color: Colors.grey[400], fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text(
+              'GO BACK',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> openDNDSettings() async {
@@ -177,35 +473,19 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-  void _showDndPermissionDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
-        shape: const LinearBorder(),   
-        title: const Text(
-          'SYSTEM PERMISSION REQUIRED', 
-          style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 1),
-        ),
-        content: Text(
-          'Zen Launcher needs notification policy access to automatically suppress incoming calls and message alerts.',
-          style: TextStyle(color: Colors.grey[400], fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('CANCEL', style: TextStyle(color: Colors.grey[600], fontSize: 12, fontWeight: FontWeight.bold)),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await openDNDSettings();
-            },
-            child: const Text('GRANT ACCESS', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+  Future<void> requestDndAccess(BuildContext context) async {
+    final bool accepted = await showPermissionDisclosure(
+      eyebrow: 'DO NOT DISTURB ACCESS',
+      title: 'SILENCE THE NOISE',
+      body:
+          'Zen Launcher needs notification policy access to turn Do Not Disturb on and off for you. '
+          'This only changes the system Do Not Disturb state. It does not read, store, or upload your calls, messages, or notification content. '
+          'You can revoke this access at any time in Android Settings.',
+      continueLabel: 'GRANT ACCESS',
     );
+
+    if (!accepted || !context.mounted) return;
+    await openDNDSettings();
   }
 
   // =================================================================
@@ -390,6 +670,15 @@ class AppController extends GetxController with WidgetsBindingObserver {
 
   /// The absolute master click handler—no conditions, always blocks first!
   Future<void> launchApplicationContainer(String packageName) async {
+    if (appTimersActive.value) {
+      await refreshUsageStats();
+      if (isAppOverLimit(packageName)) {
+        log("Daily limit reached for $packageName. Blocking launch.");
+        _showLimitReached(packageName);
+        return;
+      }
+    }
+
     log("Intercepting launch intent for $packageName. Showing Interrupter immediately.");
     triggerInterrupterGate(packageName);
   }
@@ -512,94 +801,83 @@ class AppController extends GetxController with WidgetsBindingObserver {
       }
     } on PlatformException catch (e) {
       log("Failed to execute platform hardware screen lock: ${e.message}");
-      
-      // Catch the specific error string passed over from Kotlin
+
       if (e.code == "DISABLED" || e.code == "REJECTED") {
         Get.snackbar(
-          'ACCESSIBILITY REQUIRED',
+          'DEVICE ADMIN REQUIRED',
           'Tap here to authorize Zen Launcher to sleep the screen automatically.',
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.black,
           colorText: Colors.white,
           borderRadius: 0,
           duration: const Duration(seconds: 4),
-          // If they tap the notification snackbar, open settings automatically!
           onTap: (_) {
-            openAccessibilitySystemSettings();
+            requestDeviceAdminPermission();
           },
         );
       }
     }
   }
 
-  Future<void> openAccessibilitySystemSettings() async {
+  Future<void> requestDeviceAdminPermission() async {
     try {
-      await platform.invokeMethod('openAccessibilitySettings');
-      log("Redirected user directly to system accessibility control panel.");
+      await platform.invokeMethod('requestDeviceAdmin');
+      log("Redirected user to the Android device admin screen.");
     } on PlatformException catch (e) {
-      log("Failed to launch accessibility routing sequence: ${e.message}");
+      log("Failed to launch device admin screen: ${e.message}");
+    }
+  }
+
+  Future<void> removeDeviceAdminPermission() async {
+    try {
+      await platform.invokeMethod('removeDeviceAdmin');
+    } on PlatformException catch (e) {
+      log("Failed to remove device admin: ${e.message}");
     }
   }
 
   /// Manages the activation state based on real system confirmation
   Future<void> toggleDoubleTapLock(bool targetState) async {
     if (targetState) {
-      // 1. Immediately route them to the settings panel
-      await openAccessibilitySystemSettings();
+      final bool accepted = await showPermissionDisclosure(
+        eyebrow: 'DEVICE ADMIN',
+        title: 'DOUBLE-TAP TO LOCK',
+        body:
+            'Zen Launcher uses Android\'s device administrator only to turn the screen off when you double-tap an empty area of the home screen. '
+            'It cannot erase the device, change your password, or modify any other setting. '
+            'You can remove it at any time from Android Settings > Security > Device admin apps.',
+        continueLabel: 'CONTINUE',
+      );
 
-      // 2. WAIT! This delay gives the OS a brief moment to open the settings app window
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      // 3. We pause execution here until the user comes back to Zen Launcher.
-      // (When they hit back from settings, this async line resumes automatically)
-      
-      // 4. Run the native permission test right now
-      bool truePermissionStatus = await checkAccessibilityPermission();
-
-      if (truePermissionStatus) {
-        isDoubleTapLockEnabled.value = true;
-        log("Double-tap permission verified. Activated cleanly.");
-      } else {
-        // The user backed out without flipping the toggle! Force switch off.
+      if (!accepted) {
         isDoubleTapLockEnabled.value = false;
-        log("Permission denied by user. Reverting toggle state to off.");
-        
-        Get.snackbar(
-          'PERMISSION DENIED',
-          'Double-tap to lock requires enabling the service in settings.',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: Colors.black,
-          colorText: Colors.white,
-          borderRadius: 0,
-        );
+        return;
       }
+
+      await requestDeviceAdminPermission();
+      // The toggle is reconciled by syncDoubleTapToggleWithSystem() when the
+      // user returns from the system screen.
     } else {
-      // Turning it off requires no verification, just drop the local preference
       isDoubleTapLockEnabled.value = false;
+      await removeDeviceAdminPermission();
     }
   }
 
   /// Native helper that returns true/false from Android OS
-  Future<bool> checkAccessibilityPermission() async {
+  Future<bool> checkDeviceAdminPermission() async {
     try {
-      final bool isEnabled = await platform.invokeMethod('checkAccessibilityPermission');
+      final bool isEnabled = await platform.invokeMethod('checkDeviceAdminPermission');
       return isEnabled;
     } catch (e) {
-      log("Error checking accessibility permission: $e");
+      log("Error checking device admin permission: $e");
       return false;
     }
   }
 
   /// Checks the actual native OS state and forces the UI switch to match it perfectly
   Future<void> syncDoubleTapToggleWithSystem() async {
-    bool hasPermission = await checkAccessibilityPermission();
-    
-    // If permission is active, make sure our local toggle reflects it
-    if (hasPermission) {
-      isDoubleTapLockEnabled.value = true;
-    } else {
-      isDoubleTapLockEnabled.value = false;
-    }
+    final bool hasPermission = await checkDeviceAdminPermission();
+    isDoubleTapLockEnabled.value = hasPermission;
   }
 
   /// Handles the countdown ticking

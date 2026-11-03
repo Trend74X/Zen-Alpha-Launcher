@@ -2,5 +2,4 @@
 <resources>
     <string name="app_name">Zen Launcher</string>
     
-    <string name="accessibility_description">Double-tap launcher background to turn off the screen.</string>
 </resources>

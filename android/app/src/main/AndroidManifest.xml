@@ -1,19 +1,38 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY"/>
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
-    
-    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-    
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
-
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
 
+    <!--
+        App Timers use UsageStatsManager to read how long apps have been in the
+        foreground today. This is a user-granted special access ("Usage access"),
+        not a runtime permission, and the data stays on-device.
+    -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!--
+        battery_optimization_helper adds REQUEST_IGNORE_BATTERY_OPTIMIZATIONS in its
+        own manifest. Zen only opens the battery-optimization settings list, which
+        does not require this restricted permission, so strip it from the merged
+        manifest to avoid a Play policy review flag.
+    -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:node="remove" />
+
+    <!--
+        Package visibility: a launcher only needs to see apps that expose a
+        launcher activity. This <queries> block is the Play-policy-friendly
+        replacement for QUERY_ALL_PACKAGES.
+    -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -40,68 +59,81 @@
     <application
         android:label="Zen Launcher"
         android:name="${applicationName}"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher">
 
-        <service android:name=".ZenNotificationListener"
-                android:label="Zen Notification Service"
-                android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-                android:exported="true">
+        <!--
+            The notification listener is provided by flutter_notification_listener_plus.
+            This is the only listener service the app needs. The old custom
+            ZenNotificationListener service was unused and has been removed.
+        -->
+        <service
+            android:name="im.zoe.labs.flutter_notification_listener.NotificationsHandlerService"
+            android:label="Zen Notification Listener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:foregroundServiceType="specialUse"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
+
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Zen Launcher keeps the user's in-app Notification Vault in sync while Zen mode is active."/>
         </service>
 
-        <service android:name=".ZenAccessibilityService"
-                android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-                android:exported="true">
+        <!-- Device Admin is used only for double-tap-to-lock. -->
+        <receiver
+            android:name=".ZenDeviceAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
             <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
-            <meta-data android:name="android.accessibilityservice" 
-                    android:resource="@xml/accessibility_service_config" />
-        </service>
-        
+        </receiver>
+
+        <!--
+            Home activity. singleTask + stateNotNeeded + excludeFromRecents keep
+            Zen resident as the home surface instead of behaving like a normal
+            app that can be swiped away from Recents.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleInstance"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:excludeFromRecents="true"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-            
+
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
-              
+
+            <!-- HOME role: makes Zen the system home screen. -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
                 <category android:name="android.intent.category.HOME"/>
                 <category android:name="android.intent.category.DEFAULT"/>
             </intent-filter>
-        </activity>
 
-        <service 
-            android:name="im.zoe.labs.flutter_notification_listener.NotificationsHandlerService"
-            android:label="Zen Notification Listener"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:foregroundServiceType="specialUse" 
-            android:exported="true">
+            <!-- App-drawer entry so settings stay reachable from other launchers. -->
             <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            
-            <property 
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" 
-                android:value="Zen Launcher background focus tracker tracking notification logs."/>
-        </service>
+        </activity>
 
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-            
+
     </application>
 </manifest>
