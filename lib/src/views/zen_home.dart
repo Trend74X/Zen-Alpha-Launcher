@@ -104,7 +104,7 @@ class ZenHome extends StatelessWidget {
 
                     return _buildLargeLink(
                       appMatch.name.toUpperCase(), // Displays raw app label uppercase matching design rules
-                      () => controller.launchApplicationContainer(appMatch.packageName)
+                      () => controller.launchPinnedApp(appMatch.packageName)
                     );
                   }).toList(),
                 );

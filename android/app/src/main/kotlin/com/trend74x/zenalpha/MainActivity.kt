@@ -17,6 +17,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.os.Process
@@ -125,48 +126,79 @@ class MainActivity : FlutterFragmentActivity() {
                     result.success(isDefaultLauncher())
                 }
 
+                // Diagnostic: does this installed build actually declare a
+                // HOME activity? If this is false, no system screen can ever
+                // offer Zen and the fix is reinstalling a correct APK.
+                "isHomeActivityRegistered" -> {
+                    result.success(isHomeActivityRegistered())
+                }
+
+                "getCurrentHomePackage" -> {
+                    result.success(getCurrentHomePackage())
+                }
+
                 "requestDefaultLauncher" -> {
-                    try {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    if (isDefaultLauncher()) {
+                        result.success("already")
+                        return@setMethodCallHandler
+                    }
+
+                    var prompted = false
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        try {
                             val roleManager = getSystemService(RoleManager::class.java)
                             if (roleManager != null &&
-                                roleManager.isRoleAvailable(RoleManager.ROLE_HOME) &&
-                                !roleManager.isRoleHeld(RoleManager.ROLE_HOME)
+                                roleManager.isRoleAvailable(RoleManager.ROLE_HOME)
                             ) {
-                                startActivity(roleManager.createRequestRoleIntent(RoleManager.ROLE_HOME))
-                                result.success(true)
-                            } else {
-                                // Already held or unavailable on this device: show the
-                                // system home-app list as a fallback.
-                                startActivity(
-                                    Intent(Settings.ACTION_HOME_SETTINGS)
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
-                                result.success(true)
+                                val roleIntent =
+                                    roleManager.createRequestRoleIntent(RoleManager.ROLE_HOME)
+                                startActivity(roleIntent)
+                                prompted = true
                             }
-                        } else {
-                            startActivity(
-                                Intent(Settings.ACTION_HOME_SETTINGS)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                            result.success(true)
+                        } catch (e: Exception) {
+                            // Some OEM builds (notably MIUI) reject the role prompt.
+                            // Fall through to the settings screen below.
                         }
-                    } catch (e: Exception) {
-                        // Some OEM builds reject the role intent. Fall back to the
-                        // system home-app picker so the user can still choose Zen.
-                        try {
-                            startActivity(
-                                Intent(Settings.ACTION_HOME_SETTINGS)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                            result.success(true)
-                        } catch (fallbackError: Exception) {
-                            result.error(
-                                "INTENT_FAILED",
-                                "Could not open default-launcher settings: ${e.message}",
-                                null
-                            )
-                        }
+                    }
+
+                    if (!prompted) {
+                        prompted = openHomeSettings()
+                    }
+
+                    result.success(if (prompted) "prompted" else "unavailable")
+                }
+
+                "openHomeSettings" -> {
+                    if (openHomeSettings()) {
+                        result.success(true)
+                    } else {
+                        result.error(
+                            "INTENT_FAILED",
+                            "Could not open the system Home app settings.",
+                            null
+                        )
+                    }
+                }
+
+                // --- SYSTEM NAVIGATION STYLE ---
+                "getNavigationMode" -> {
+                    result.success(getNavigationMode())
+                }
+
+                "getDeviceManufacturer" -> {
+                    result.success(Build.MANUFACTURER ?: "")
+                }
+
+                "openNavigationSettings" -> {
+                    if (openNavigationSettings()) {
+                        result.success(true)
+                    } else {
+                        result.error(
+                            "INTENT_FAILED",
+                            "Could not open the system navigation settings.",
+                            null
+                        )
                     }
                 }
 
@@ -207,6 +239,14 @@ class MainActivity : FlutterFragmentActivity() {
                         result.success(getForegroundPackage())
                     } catch (e: Exception) {
                         result.error("USAGE_FAILED", "Could not read foreground app: ${e.message}", null)
+                    }
+                }
+
+                "getTodayScreenTime" -> {
+                    try {
+                        result.success(getTodayScreenOnMillis())
+                    } catch (e: Exception) {
+                        result.error("USAGE_FAILED", "Could not read screen time: ${e.message}", null)
                     }
                 }
 
@@ -338,19 +378,212 @@ class MainActivity : FlutterFragmentActivity() {
     private fun getUsageStatsManager(): UsageStatsManager =
         getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
+    /** Resolved package of the current HOME app, or null when none resolves. */
+    @Suppress("DEPRECATION")
+    private fun getCurrentHomePackage(): String? {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        return packageManager
+            .resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo
+            ?.packageName
+    }
+
     /** True when Zen is the system's chosen HOME app. */
     private fun isDefaultLauncher(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val roleManager = getSystemService(RoleManager::class.java)
-            roleManager?.isRoleHeld(RoleManager.ROLE_HOME) == true
-        } else {
-            @Suppress("DEPRECATION")
-            val resolved = packageManager.resolveActivity(
-                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
-                PackageManager.MATCH_DEFAULT_ONLY
-            )
-            resolved?.activityInfo?.packageName == packageName
+            if (roleManager?.isRoleHeld(RoleManager.ROLE_HOME) == true) {
+                return true
+            }
         }
+
+        // RoleManager is unreliable on some OEM builds (MIUI, One UI). Treat a
+        // resolved HOME intent that lands on Zen as authoritative too.
+        return getCurrentHomePackage() == packageName
+    }
+
+    /**
+     * True when this installed build declares a HOME activity.
+     *
+     * The app queries only its own package here. If this returns false, the
+     * user cannot select Zen as a Home app no matter which settings screen
+     * opens, which usually means an old or partially-installed APK.
+     */
+    private fun isHomeActivityRegistered(): Boolean {
+        return try {
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            packageManager.queryIntentActivities(intent, 0).any {
+                it.activityInfo?.packageName == packageName
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Opens the system screen where the user can pick the HOME app.
+     *
+     * No single intent works on every OEM skin, so try the public Home-app
+     * screen first and then a chain of known fallbacks. Try to start each one
+     * rather than only resolving it: several Settings activities resolve to
+     * nothing but are still launchable by explicit component.
+     */
+    @Suppress("DEPRECATION")
+    private fun openHomeSettings(): Boolean {
+        val candidates = ArrayList<Intent>()
+
+        candidates.add(Intent(Settings.ACTION_HOME_SETTINGS))
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            candidates.add(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+        }
+
+        // AOSP Settings variants used by Pixel, OnePlus, Sony, and others.
+        candidates.add(
+            Intent().setComponent(
+                ComponentName(
+                    "com.android.settings",
+                    "com.android.settings.Settings\$HomeSettingsActivity"
+                )
+            )
+        )
+        candidates.add(
+            Intent().setComponent(
+                ComponentName(
+                    "com.android.settings",
+                    "com.android.settings.Settings\$DefaultHomeSettingsActivity"
+                )
+            )
+        )
+        candidates.add(
+            Intent().setComponent(
+                ComponentName(
+                    "com.android.settings",
+                    "com.android.settings.homepage.SettingsHomepageActivity"
+                )
+            )
+        )
+
+        // Last resort: Zen's own App info page, where OEM skins usually expose
+        // "Open by default" / "Home app" controls.
+        candidates.add(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", packageName, null)
+            )
+        )
+        candidates.add(Intent(Settings.ACTION_SETTINGS))
+
+        for (base in candidates) {
+            try {
+                val intent = Intent(base).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                return true
+            } catch (e: Exception) {
+                // Try the next candidate.
+            }
+        }
+
+        return false
+    }
+
+    /**
+     * System navigation style: 0 = 3-button, 1 = 2-button, 2 = gesture,
+     * -1 = unknown / not readable.
+     *
+     * Android does not let a normal app write this value. Only a system or
+     * privileged app (or ADB with WRITE_SECURE_SETTINGS) can change it, so Zen
+     * can open the correct settings screen but must let the user choose.
+     */
+    private fun getNavigationMode(): Int {
+        for (key in listOf("navigation_mode", "navigation_bar_mode")) {
+            try {
+                val value = Settings.Secure.getInt(contentResolver, key, -1)
+                if (value in 0..2) return value
+            } catch (e: Exception) {
+                // Try the next key.
+            }
+        }
+
+        // Some OEM skins only expose the boolean form.
+        return try {
+            when (Settings.Secure.getInt(contentResolver, "system_navigation_keys_enabled", -1)) {
+                1 -> 0
+                0 -> 2
+                else -> -1
+            }
+        } catch (e: Exception) {
+            -1
+        }
+    }
+
+    /**
+     * Opens the system screen that lets the user pick gesture vs button
+     * navigation. Different OEM skins hide this behind different activities,
+     * so try the common ones in order.
+     */
+    private fun openNavigationSettings(): Boolean {
+        val candidates = ArrayList<Intent>()
+
+        // AOSP / Pixel / most MIUI and HyperOS builds.
+        candidates.add(Intent("com.android.settings.NAVIGATION_MODE_SETTINGS"))
+        candidates.add(Intent("com.android.settings.GESTURE_NAVIGATION_SETTINGS"))
+        candidates.add(
+            Intent().setComponent(
+                ComponentName(
+                    "com.android.settings",
+                    "com.android.settings.Settings\$NavigationModeSettingsActivity"
+                )
+            )
+        )
+        candidates.add(
+            Intent().setComponent(
+                ComponentName(
+                    "com.android.settings",
+                    "com.android.settings.Settings\$GestureNavigationSettingsActivity"
+                )
+            )
+        )
+        candidates.add(
+            Intent().setComponent(
+                ComponentName(
+                    "com.android.settings",
+                    "com.android.settings.Settings\$SystemNavigationSettingsActivity"
+                )
+            )
+        )
+
+        // Samsung puts navigation style under Settings > Display.
+        candidates.add(
+            Intent().setComponent(
+                ComponentName(
+                    "com.samsung.android.settings",
+                    "com.samsung.android.settings.display.NavigationBarSettingsActivity"
+                )
+            )
+        )
+        candidates.add(
+            Intent().setComponent(
+                ComponentName(
+                    "com.samsung.android.settings",
+                    "com.samsung.android.settings.display.NavigationBarGestureSettingsActivity"
+                )
+            )
+        )
+        candidates.add(Intent(Settings.ACTION_DISPLAY_SETTINGS))
+        candidates.add(Intent(Settings.ACTION_SETTINGS))
+
+        for (base in candidates) {
+            try {
+                val intent = Intent(base).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                return true
+            } catch (e: Exception) {
+                // Try the next candidate.
+            }
+        }
+
+        return false
     }
 
     private fun startOfToday(): Long {
@@ -390,6 +623,66 @@ class MainActivity : FlutterFragmentActivity() {
         }
 
         return totals
+    }
+
+    /**
+     * Real screen-on time since local midnight, derived from UsageEvents.
+     *
+     * Returns null on Android < 9 where the screen-interactive event constants
+     * are unavailable, so Dart can keep its local fallback.
+     */
+    @Suppress("DEPRECATION")
+    private fun getTodayScreenOnMillis(): Long? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+
+        val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        @Suppress("DEPRECATION")
+        val access = appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            packageName
+        )
+        if (access != AppOpsManager.MODE_ALLOWED) return null
+
+        val now = System.currentTimeMillis()
+        val todayStart = startOfToday()
+        val events = getUsageStatsManager().queryEvents(todayStart, now)
+        val event = UsageEvents.Event()
+
+        var lastOn: Long? = null
+        var total = 0L
+        var sawScreenEvent = false
+
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            when (event.eventType) {
+                UsageEvents.Event.SCREEN_INTERACTIVE -> {
+                    lastOn = event.timeStamp
+                    sawScreenEvent = true
+                }
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+                    val start = lastOn ?: todayStart
+                    if (event.timeStamp > start) {
+                        total += event.timeStamp - start
+                    }
+                    lastOn = null
+                    sawScreenEvent = true
+                }
+            }
+        }
+
+        if (lastOn != null) {
+            total += (now - lastOn!!).coerceAtLeast(0L)
+        } else if (!sawScreenEvent) {
+            // No screen events yet today. If the screen is on now, the device
+            // was very likely already on at midnight.
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (powerManager.isInteractive) {
+                total = now - todayStart
+            }
+        }
+
+        return total
     }
 
     @Suppress("DEPRECATION")

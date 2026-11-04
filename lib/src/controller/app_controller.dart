@@ -46,9 +46,11 @@ class AppController extends GetxController with WidgetsBindingObserver {
   Timer? _tickerTimer;
   int  _accumulatedSecondsToday = 0;
   bool _isDeviceScreenOn        = true;
+  DateTime _screenTimeDay       = DateTime.now();
 
     // Native hardware platform port pipeline communication memory trace
   ReceivePort? _uiReceivePort;
+  bool _notificationBridgeInitialized = false;
 
     // --- APPLICATION REPOS & VAULTS ---
   var installedApps     = <AppModel>[].obs;
@@ -65,6 +67,10 @@ class AppController extends GetxController with WidgetsBindingObserver {
     // --- DEFAULT HOME / LAUNCHER ROLE ---
   var isDefaultLauncher = false.obs;
 
+    // --- SYSTEM NAVIGATION STYLE (read-only; Android/OEM owns this) ---
+  var navigationMode   = (-1).obs; // 0=3-button, 1=2-button, 2=gesture, -1=unknown
+  var deviceManufacturer = ''.obs;
+
     // --- THE INTERRUPTER PROPERTIES ---
   var isInterrupterActive         = false.obs;
   var interrupterRemainingSeconds = 5.obs;
@@ -77,7 +83,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     
     // Core Launcher Lifecycle Initialization Hooks
+    _loadWorkspacePreferences();
     await checkDefaultLauncher();
+    await refreshNavigationMode();
     await startZenModeWorkflow();
     await fetchInstalledApps();
     await initAppTimers();
@@ -107,10 +115,44 @@ class AppController extends GetxController with WidgetsBindingObserver {
       log("User returned to launcher. Re-checking remaining workflows...");
       startZenModeWorkflow();
       checkDefaultLauncher();
+      refreshNavigationMode();
       maybePromptDefaultLauncher();
       syncDoubleTapToggleWithSystem();
       syncAppTimersWithSystem();
+      refreshScreenTime();
     }
+  }
+
+  /// Restores workspace choices that previously lived only in memory.
+  ///
+  /// Without this, pinned home apps, hidden apps, and the icon-visibility
+  /// toggle all reset every time Android killed and recreated the launcher.
+  void _loadWorkspacePreferences() {
+    final dynamic storedPinned = _storage.read('pinned_home_apps');
+    if (storedPinned is List) {
+      pinnedHomeApps.assignAll(storedPinned.whereType<String>());
+    }
+
+    final dynamic storedHidden = _storage.read('hidden_app_packages');
+    if (storedHidden is List) {
+      hiddenAppPackages.assignAll(storedHidden.whereType<String>());
+    }
+
+    showIcons.value = _storage.read<bool>('show_icons') ?? true;
+  }
+
+  void _persistPinnedApps() {
+    _storage.write('pinned_home_apps', pinnedHomeApps.toList());
+  }
+
+  void _persistHiddenApps() {
+    _storage.write('hidden_app_packages', hiddenAppPackages.toList());
+  }
+
+  /// Persists the app-drawer icon visibility preference.
+  void setShowIcons(bool value) {
+    showIcons.value = value;
+    _storage.write('show_icons', value);
   }
 
   // =================================================================
@@ -211,13 +253,317 @@ class AppController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-  /// Opens the system prompt/settings to make Zen the default home app.
-  Future<void> requestDefaultLauncher() async {
+  /// True when this installed build actually declares a HOME activity.
+  ///
+  /// If false, Android cannot offer Zen on the Home-app picker at all. That
+  /// usually means a stale or partially installed APK, so the UI should say so
+  /// instead of sending the user to a settings screen that cannot help.
+  Future<bool> isHomeActivityRegistered() async {
     try {
-      await platform.invokeMethod('requestDefaultLauncher');
+      return await platform.invokeMethod<bool>('isHomeActivityRegistered') ?? true;
+    } catch (e) {
+      log("Error checking HOME registration: $e");
+      return true;
+    }
+  }
+
+  /// The package name of the current HOME app, used in help text.
+  Future<String?> currentHomePackage() async {
+    try {
+      return await platform.invokeMethod<String>('getCurrentHomePackage');
+    } catch (e) {
+      log("Error reading current HOME app: $e");
+      return null;
+    }
+  }
+
+  /// Guides the user through making Zen the system HOME app.
+  ///
+  /// Android does not allow an app to promote itself silently; the user must
+  /// pick Zen on a system screen. Show exact instructions and give them two
+  /// ways in, because the RoleManager prompt is hidden on several OEM skins.
+  Future<void> requestDefaultLauncher() async {
+    if (Get.isDialogOpen == true) return;
+
+    await checkDefaultLauncher();
+    if (isDefaultLauncher.value) {
+      _showHomeSnack(
+        'ZEN IS ALREADY HOME',
+        'Pressing Home already opens Zen. Change this any time in Android Settings.',
+      );
+      return;
+    }
+
+    if (!await isHomeActivityRegistered()) {
+      await _showHomeRegistrationError();
+      return;
+    }
+
+    final String? currentHome = await currentHomePackage();
+    final String currentHomeLine =
+        (currentHome == null || currentHome == appPackageName)
+            ? ''
+            : '\n\nCurrent Home app: $currentHome';
+
+    final String? choice = await Get.dialog<String>(
+      AlertDialog(
+        backgroundColor: Colors.black,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white24),
+          borderRadius: BorderRadius.zero,
+        ),
+        title: const Text(
+          'MAKE ZEN YOUR HOME',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+          ),
+        ),
+        content: Text(
+          'Android only changes the Home app from system settings.\n\n'
+          '1. Open Home app settings.\n'
+          '2. Choose Zen Alpha.\n'
+          '3. Press Home. Zen stays put instead of minimizing.'
+          '$currentHomeLine',
+          style: TextStyle(
+            color: Colors.grey[400],
+            fontSize: 12,
+            height: 1.5,
+          ),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: 'prompt'),
+            child: const Text('SYSTEM PROMPT'),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: 'settings'),
+            child: const Text('OPEN SETTINGS'),
+          ),
+        ],
+      ),
+      barrierDismissible: true,
+    );
+
+    if (choice == 'prompt') {
+      await _requestHomeRolePrompt();
+    } else if (choice == 'settings') {
+      await openHomeSettings();
+    }
+  }
+
+  /// Fires the RoleManager HOME prompt and explains the next step if Android
+  /// suppresses it (common on MIUI, One UI, and some carrier builds).
+  Future<void> _requestHomeRolePrompt() async {
+    try {
+      final String outcome =
+          await platform.invokeMethod<String>('requestDefaultLauncher') ?? 'unavailable';
+
+      // Let the system screen take focus before checking whether the user
+      // actually selected Zen. This also keeps the snackbar from covering it.
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await checkDefaultLauncher();
+
+      if (isDefaultLauncher.value) {
+        _showHomeSnack('ZEN IS HOME', 'Home now returns to Zen.');
+        return;
+      }
+
+      if (outcome == 'unavailable') {
+        await openHomeSettings();
+        return;
+      }
+
+      _showHomeSnack(
+        'ONE MORE STEP',
+        'Choose Zen Alpha on the system screen. Tap here if it did not open.',
+        onTap: openHomeSettings,
+      );
     } on PlatformException catch (e) {
       log("Failed to open default launcher settings: ${e.message}");
+      await openHomeSettings();
     }
+  }
+
+  /// Opens Android's Home-app picker directly (works on more OEM builds than
+  /// the RoleManager prompt).
+  Future<void> openHomeSettings() async {
+    try {
+      final bool opened =
+          await platform.invokeMethod<bool>('openHomeSettings') ?? false;
+      if (!opened) {
+        _showHomeSettingsManualInstructions();
+      }
+    } on PlatformException catch (e) {
+      log("Failed to open Home app settings: ${e.message}");
+      _showHomeSettingsManualInstructions();
+    }
+  }
+
+  // =================================================================
+  // SYSTEM NAVIGATION STYLE
+  // =================================================================
+
+  /// Human-readable name for the OS navigation style.
+  String get navigationModeLabel {
+    switch (navigationMode.value) {
+      case 0:
+        return '3-button navigation';
+      case 1:
+        return '2-button navigation';
+      case 2:
+        return 'Swipe gestures';
+      default:
+        return 'Unknown';
+    }
+  }
+
+  bool get isXiaomiDevice {
+    final String maker = deviceManufacturer.value.toLowerCase();
+    return maker.contains('xiaomi') ||
+        maker.contains('redmi') ||
+        maker.contains('poco');
+  }
+
+  bool get isSamsungDevice =>
+      deviceManufacturer.value.toLowerCase().contains('samsung');
+
+  /// Where the navigation picker lives on this OEM skin.
+  String get navigationSettingsPath {
+    if (isXiaomiDevice) return 'Settings > Home screen > System navigation';
+    if (isSamsungDevice) return 'Settings > Display > Navigation bar';
+    return 'Settings > System > Gestures > System navigation';
+  }
+
+  /// Reads the current OS navigation mode. Read-only for normal apps; Android
+  /// only allows system/privileged apps to change it.
+  Future<void> refreshNavigationMode() async {
+    try {
+      final int mode =
+          await platform.invokeMethod<int>('getNavigationMode') ?? -1;
+      navigationMode.value = mode;
+
+      final String maker =
+          await platform.invokeMethod<String>('getDeviceManufacturer') ?? '';
+      deviceManufacturer.value = maker;
+    } catch (e) {
+      log("Error reading navigation mode: $e");
+      navigationMode.value = -1;
+    }
+  }
+
+  /// Opens the system screen where the user chooses gesture vs button
+  /// navigation. Zen cannot change this value itself.
+  Future<void> openNavigationSettings() async {
+    try {
+      final bool opened =
+          await platform.invokeMethod<bool>('openNavigationSettings') ?? false;
+      if (!opened) {
+        _showNavigationManualInstructions();
+      }
+    } on PlatformException catch (e) {
+      log("Failed to open navigation settings: ${e.message}");
+      _showNavigationManualInstructions();
+    }
+  }
+
+  /// Explains the navigation-style limitation and offers the settings shortcut.
+  Future<void> showNavigationStyleHelp() async {
+    if (Get.isDialogOpen == true) return;
+
+    await refreshNavigationMode();
+
+    final String current = navigationModeLabel;
+    final String vendorNote = isXiaomiDevice
+        ? '\n\nXiaomi/HyperOS blocks gesture navigation for third-party launchers. '
+            'If the swipe option is missing or jumps back to buttons, that is a '
+            'Xiaomi restriction, not a Zen setting.'
+        : '';
+
+    final String? choice = await Get.dialog<String>(
+      AlertDialog(
+        backgroundColor: Colors.black,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white24),
+          borderRadius: BorderRadius.zero,
+        ),
+        title: const Text(
+          'NAVIGATION STYLE',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+          ),
+        ),
+        content: Text(
+          'Current: $current\n\n'
+          'Android controls the navigation style. Zen can open the system setting, '
+          'but it cannot change the style for you. Zen runs full-screen, so the '
+          'system bar may be hidden on the home screen; the style still applies '
+          'across Android.$vendorNote',
+          style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text('CLOSE'),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: 'open'),
+            child: const Text('OPEN SETTINGS'),
+          ),
+        ],
+      ),
+      barrierDismissible: true,
+    );
+
+    if (choice == 'open') {
+      await openNavigationSettings();
+    }
+  }
+
+  /// Shows the exact manual path when no navigation-settings intent resolves.
+  void _showNavigationManualInstructions() {
+    if (Get.isDialogOpen == true) return;
+
+    Get.dialog<void>(
+      AlertDialog(
+        backgroundColor: Colors.black,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white24),
+          borderRadius: BorderRadius.zero,
+        ),
+        title: const Text(
+          'OPEN NAVIGATION SETTINGS',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+          ),
+        ),
+        content: Text(
+          'Open $navigationSettingsPath, then choose Swipe gestures or Buttons.\n\n'
+          'Some devices use Settings > Display > Navigation bar instead.',
+          style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Nudges the user once to make Zen the system HOME app.
@@ -230,6 +576,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
 
     final bool alreadyPrompted = _storage.read<bool>('default_launcher_prompted') ?? false;
     if (alreadyPrompted || Get.isDialogOpen == true) return;
+
+    // Nothing to prompt for if this APK has no HOME activity registered.
+    if (!await isHomeActivityRegistered()) return;
 
     final bool notificationDisclosureSeen =
         _storage.read<bool>('notification_disclosure_seen') ?? false;
@@ -250,8 +599,98 @@ class AppController extends GetxController with WidgetsBindingObserver {
     );
 
     if (accepted) {
-      await requestDefaultLauncher();
+      // Go straight to the system prompt; requesting the full instructions
+      // dialog here would stack two dialogs back to back.
+      await _requestHomeRolePrompt();
     }
+  }
+
+  /// Shows the exact manual path when no Settings intent can be resolved.
+  void _showHomeSettingsManualInstructions() {
+    if (Get.isDialogOpen == true) return;
+
+    Get.dialog<void>(
+      AlertDialog(
+        backgroundColor: Colors.black,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white24),
+          borderRadius: BorderRadius.zero,
+        ),
+        title: const Text(
+          'OPEN SETTINGS MANUALLY',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+          ),
+        ),
+        content: Text(
+          'Open Android Settings > Apps > Default apps > Home app, then choose Zen Alpha.\n\n'
+          'On some devices the path is Settings > Home or Settings > Apps > Zen Alpha > Open by default.',
+          style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Explains that this build cannot be selected as HOME at all.
+  Future<void> _showHomeRegistrationError() async {
+    if (Get.isDialogOpen == true) return;
+
+    await Get.dialog<void>(
+      AlertDialog(
+        backgroundColor: Colors.black,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white24),
+          borderRadius: BorderRadius.zero,
+        ),
+        title: const Text(
+          'HOME ROLE UNAVAILABLE',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+          ),
+        ),
+        content: Text(
+          'This installed copy of Zen does not declare a Home activity, so Android cannot list it under Home app settings.\n\n'
+          'Reinstall the latest Zen Alpha APK ($appPackageName) and try again.',
+          style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Small monochrome snackbar used by the HOME setup flow.
+  void _showHomeSnack(
+    String title,
+    String message, {
+    VoidCallback? onTap,
+  }) {
+    Get.snackbar(
+      title,
+      message,
+      snackPosition: SnackPosition.BOTTOM,
+      backgroundColor: Colors.black,
+      colorText: Colors.white,
+      borderRadius: 0,
+      duration: const Duration(seconds: 8),
+      onTap: onTap == null ? null : (_) => onTap(),
+    );
   }
 
   Future<void> checkAndRequestBatteryExemption() async {
@@ -492,22 +931,37 @@ class AppController extends GetxController with WidgetsBindingObserver {
   // ISOLATED PORT LISTENER NOTIFICATION PIPELINE
   // =================================================================
   Future<void> initializeNotificationCollector() async {
+    final bool wasRunning = await NotificationsListener.isRunning ?? false;
+    final bool firstBind = !_notificationBridgeInitialized;
+
     await NotificationsListener.initialize(callbackHandle: backgroundNotificationHandler);
-    
-    IsolateNameServer.removePortNameMapping("_listener_");
 
-    _uiReceivePort = ReceivePort();
-    IsolateNameServer.registerPortWithName(_uiReceivePort!.sendPort, "_listener_");
+    if (firstBind) {
+      // Register the UI port exactly once per process. Re-creating it on every
+      // resume leaked the old ReceivePort and could split events between two
+      // live listeners.
+      IsolateNameServer.removePortNameMapping("_listener_");
+      _uiReceivePort?.close();
 
-    _uiReceivePort!.listen((rawData) {
-      if (rawData is NotificationEvent) {
-        _handleIncomingUiNotification(rawData);
-      }
-    });
+      final ReceivePort port = ReceivePort();
+      _uiReceivePort = port;
+      IsolateNameServer.registerPortWithName(port.sendPort, "_listener_");
+      port.listen((rawData) {
+        if (rawData is NotificationEvent) {
+          _handleIncomingUiNotification(rawData);
+        }
+      });
 
-    bool isServiceRunning = await NotificationsListener.isRunning ?? false;
-    if (!isServiceRunning) {
-      log("System notification tracking engine inactive. Starting service context...");
+      _notificationBridgeInitialized = true;
+    }
+
+    // The plugin caches a background Flutter engine for the listener service.
+    // If Android created that service before plugin.initialize ran (very common
+    // after a reboot or after granting Notification Access), the cached engine
+    // has no event callback and silently drops every notification. Restarting
+    // the service on the first bind forces a fresh engine with our callback.
+    if (firstBind || !wasRunning) {
+      log("Bind notification engine with a fresh service context...");
       await NotificationsListener.startService(
         foreground: true,
         title: "Zen Focus Active",
@@ -522,6 +976,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
   void _handleIncomingUiNotification(NotificationEvent event) {
     // Safety Catch: Prevent null crashes or unwanted low-priority platform loops
     if (event.packageName == null || (event.title == null && event.text == null)) return;
+    debugPrint('Zen notification UI pipeline: ${event.packageName}');
 
     // Double Safeguard: Filter package drops out of UI parsing structures if background handler leaks them
     final blockedPackages = const ['android', 'com.android.systemui', 'com.google.android.inputmethod.latin'];
@@ -648,12 +1103,14 @@ class AppController extends GetxController with WidgetsBindingObserver {
   void hideApplication(String packageName) {
     hiddenAppPackages.add(packageName);
     hiddenAppPackages.refresh();
+    _persistHiddenApps();
     log("Application structural footprint hidden from matrix: $packageName");
   }
 
   void revealApplication(String packageName) {
     hiddenAppPackages.remove(packageName);
     hiddenAppPackages.refresh();
+    _persistHiddenApps();
     log("Application context revealed back to main space: $packageName");
   }
 
@@ -683,6 +1140,26 @@ class AppController extends GetxController with WidgetsBindingObserver {
     triggerInterrupterGate(packageName);
   }
 
+  /// Launches an app that the user deliberately pinned to the home screen.
+  ///
+  /// Pinned links skip the five-second interrupter and open immediately, but
+  /// daily limits still apply. The interrupter exists to interrupt accidental
+  /// or impulsive launches from the app drawer, not a home-screen shortcut the
+  /// user created on purpose.
+  Future<void> launchPinnedApp(String packageName) async {
+    if (appTimersActive.value) {
+      await refreshUsageStats();
+      if (isAppOverLimit(packageName)) {
+        log("Daily limit reached for pinned app $packageName. Blocking launch.");
+        _showLimitReached(packageName);
+        return;
+      }
+    }
+
+    log("Pinned home launch for $packageName. Skipping interrupter.");
+    await _directNativeLaunch(packageName);
+  }
+
   // =================================================================
   // DYNAMIC HOME SCREEN ADDITIONS SLOTS (MAX 6 EXTRA SLOTS)
   // =================================================================
@@ -696,6 +1173,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
       if (pinnedHomeApps.length < 6) { 
         pinnedHomeApps.add(packageName);
         pinnedHomeApps.refresh();
+        _persistPinnedApps();
         log("App pinned to home workspace canvas: $packageName");
       } else {
         Get.snackbar(
@@ -714,6 +1192,7 @@ class AppController extends GetxController with WidgetsBindingObserver {
     if (pinnedHomeApps.contains(packageName)) {
       pinnedHomeApps.remove(packageName);
       pinnedHomeApps.refresh();
+      _persistPinnedApps();
       log("App pulled off home workspace canvas: $packageName");
     }
   }
@@ -730,7 +1209,9 @@ class AppController extends GetxController with WidgetsBindingObserver {
     });
 
     _accumulatedSecondsToday = 0;
+    _screenTimeDay = DateTime.now();
     _startDisplayTicker();
+    unawaited(refreshScreenTime());
   }
 
   void _handleScreenStateUpdate(bool isScreenActive) {
@@ -754,11 +1235,34 @@ class AppController extends GetxController with WidgetsBindingObserver {
         _updateDisplayString();
         
         final now = DateTime.now();
-        if (now.hour == 0 && now.minute == 0 && now.second == 0) {
+        if (now.year != _screenTimeDay.year ||
+            now.month != _screenTimeDay.month ||
+            now.day != _screenTimeDay.day) {
+          // Midnight rollover while the launcher is awake.
+          _screenTimeDay = now;
           _accumulatedSecondsToday = 0;
+          _updateDisplayString();
+          unawaited(refreshScreenTime());
         }
       }
     });
+  }
+
+  /// Pulls real screen-on time for today from Android usage events.
+  ///
+  /// Without Usage Access the native call returns null and the local ticker
+  /// remains the fallback.
+  Future<void> refreshScreenTime() async {
+    try {
+      final dynamic millis = await platform.invokeMethod('getTodayScreenTime');
+      if (millis is num && millis >= 0) {
+        _accumulatedSecondsToday = (millis / 1000).floor();
+        _screenTimeDay = DateTime.now();
+        _updateDisplayString();
+      }
+    } catch (e) {
+      log("Could not refresh device screen time: $e");
+    }
   }
 
   void _updateDisplayString() {
@@ -770,12 +1274,22 @@ class AppController extends GetxController with WidgetsBindingObserver {
 
   Future<bool> authenticateUserSecurely({required String reason}) async {
     try {
-      final bool canAuthenticateWithBiometrics = await localAuth.canCheckBiometrics;
       final bool isDeviceSupported = await localAuth.isDeviceSupported();
-      
-      if (!canAuthenticateWithBiometrics && !isDeviceSupported) {
-        log("Security Layer Error: Device lacks lockscreen credential validation setups.");
+
+      if (!isDeviceSupported) {
+        _showAuthIssue(
+          title: 'NO SCREEN LOCK SET',
+          message:
+              'Hidden apps need a screen lock. Set a PIN, pattern, password, or fingerprint in Android Settings first.',
+        );
         return false;
+      }
+
+      final List<BiometricType> enrolled =
+          await localAuth.getAvailableBiometrics();
+      if (enrolled.isEmpty) {
+        final bool useScreenLock = await _confirmDeviceCredentialFallback();
+        if (!useScreenLock) return false;
       }
 
       return await localAuth.authenticate(
@@ -787,10 +1301,136 @@ class AppController extends GetxController with WidgetsBindingObserver {
           ),
         ],
       );
+    } on PlatformException catch (error) {
+      log("Authentication platform exception: ${error.code} - ${error.message}");
+      switch (error.code) {
+        case 'NotAvailable':
+        case 'NotEnrolled':
+          _showAuthIssue(
+            title: 'FINGERPRINT NOT AVAILABLE',
+            message:
+                'No fingerprint is enrolled on this device. Add one in Android Settings, then try again.',
+          );
+          break;
+        case 'PasscodeNotSet':
+          _showAuthIssue(
+            title: 'NO SCREEN LOCK SET',
+            message:
+                'Set a PIN, pattern, password, or fingerprint in Android Settings before using hidden apps.',
+          );
+          break;
+        case 'LockedOut':
+        case 'PermanentlyLockedOut':
+          _showAuthIssue(
+            title: 'FINGERPRINT LOCKED',
+            message:
+                'Too many failed attempts. Unlock your phone with your PIN, then try again.',
+          );
+          break;
+        default:
+          _showAuthIssue(
+            title: 'AUTHENTICATION UNAVAILABLE',
+            message:
+                'Zen could not start fingerprint or screen-lock authentication on this device.',
+          );
+      }
+      return false;
     } catch (error) {
       log("Authentication exception intercepted: $error");
-      return false; 
+      _showAuthIssue(
+        title: 'AUTHENTICATION ERROR',
+        message: 'Zen could not verify your identity. Please try again.',
+      );
+      return false;
     }
+  }
+
+  /// Offered when the device has a screen lock but no enrolled fingerprint.
+  Future<bool> _confirmDeviceCredentialFallback() async {
+    final bool? useScreenLock = await Get.dialog<bool>(
+      AlertDialog(
+        backgroundColor: const Color(0xFF0F0F0F),
+        shape: const LinearBorder(),
+        title: const Text(
+          'FINGERPRINT NOT AVAILABLE',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.5,
+          ),
+        ),
+        content: Text(
+          'No fingerprint is enrolled on this device. Add one in Android Settings, '
+          'or continue with your screen lock PIN.',
+          style: TextStyle(color: Colors.grey[400], fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text(
+              'CANCEL',
+              style: TextStyle(
+                color: Colors.grey,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text(
+              'USE PIN',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return useScreenLock ?? false;
+  }
+
+  /// Shows a blocking, readable error instead of failing silently.
+  void _showAuthIssue({required String title, required String message}) {
+    if (Get.isDialogOpen == true) return;
+
+    Get.dialog(
+      AlertDialog(
+        backgroundColor: const Color(0xFF0F0F0F),
+        shape: const LinearBorder(),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.5,
+          ),
+        ),
+        content: Text(
+          message,
+          style: TextStyle(color: Colors.grey[400], fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text(
+              'OK',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> lockDeviceScreen() async {
@@ -963,6 +1603,7 @@ class AppModel {
 void backgroundNotificationHandler(NotificationEvent event) {
   // Extract package signature strings cleanly
   final String currentPackage = event.packageName?.toLowerCase() ?? '';
+  debugPrint('Zen notification background event: $currentPackage');
 
   // Core System Pipeline Blacklist Filtering
   // Discards keyboard selection prompts ("Choose input method") right at the background boundary!

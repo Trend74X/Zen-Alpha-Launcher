@@ -2,13 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:zen_launcher/src/controller/app_controller.dart';
 
-class ZenIndex extends StatelessWidget {
+class ZenIndex extends StatefulWidget {
   const ZenIndex({super.key});
+
+  @override
+  State<ZenIndex> createState() => _ZenIndexState();
+}
+
+class _ZenIndexState extends State<ZenIndex> {
+  final TextEditingController searchTexController = TextEditingController();
+
+  @override
+  void dispose() {
+    searchTexController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final AppController controller = Get.find<AppController>();
-    final TextEditingController searchTexController = TextEditingController();
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -78,7 +90,7 @@ class ZenIndex extends StatelessWidget {
 
                     // --- VISIBILITY CONFIG TOGGLE ICON ---
                     Obx(() => InkWell(
-                      onTap: () => controller.showIcons.toggle(),
+                      onTap: () => controller.setShowIcons(!controller.showIcons.value),
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
                         height: 44,
@@ -248,7 +260,7 @@ Future<dynamic> hideOrPinAppsDialog({
           final bool isPinned = controller.isAppPinnedToHome(app.packageName);
           final bool isHidden = controller.hiddenAppPackages.contains(app.packageName);
           // Check if the home screen has already saturated its 6 custom slots
-          final bool isHomeCanvasFull = controller.pinnedHomeApps.length >= 5;
+          final bool isHomeCanvasFull = controller.pinnedHomeApps.length >= 6;
           
           return Column(
             mainAxisSize: MainAxisSize.min,

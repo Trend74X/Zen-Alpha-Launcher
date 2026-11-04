@@ -83,6 +83,14 @@ class ZenToolsPage extends StatelessWidget {
                     ),
 
                     buildNavigationSetting(
+                      title: 'Navigation Style',
+                      subtitle: controller.navigationMode.value == -1
+                          ? 'Open Android settings to choose swipe gestures or buttons.'
+                          : '${controller.navigationModeLabel}. Open Android settings to change it.',
+                      onTap: () => controller.showNavigationStyleHelp(),
+                    ),
+
+                    buildNavigationSetting(
                       title: 'Hidden Applications',
                       subtitle: 'Apps filtered out of your daily awareness loops.',
                       onTap: () async {
